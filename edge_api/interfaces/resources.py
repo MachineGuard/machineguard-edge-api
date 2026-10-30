@@ -6,7 +6,10 @@ from ..domain.model import CalibrationProfile, LocalBuffer, OfflineNode, SensorR
 
 
 def iso(dt: Optional[datetime]) -> Optional[str]:
-    return dt.replace(microsecond=0).isoformat() + "Z" if dt else None
+    if dt is None:
+        return None
+    utc = dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+    return utc.isoformat().replace("+00:00", "Z")
 
 
 def parse_instant(value) -> Optional[datetime]:
