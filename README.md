@@ -20,6 +20,8 @@ Pruebas:
 python -m pytest
 ```
 
+Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en español, en `tests/features` y se ejecutan con pytest-bdd (`tests/test_bdd_acceptance.py`). Para generar el reporte en formato Cucumber, crea la carpeta `reports` y ejecuta `python -m pytest --cucumberjson=reports/cucumber.json`. GitHub Actions (`.github/workflows/ci.yml`) ejecuta todas las pruebas en cada push y pull request a `develop` y `main`.
+
 ## Configuración (variables de entorno)
 
 | Variable | Descripción | Por defecto |
@@ -67,4 +69,18 @@ El gateway se autentica con la cabecera `X-Device-Credential` y publica:
 - `POST {MACHINEGUARD_API_URL}/api/v1/measurements` con `{deviceCode, temperature, humidity, capturedAt}`
 - `POST {MACHINEGUARD_API_URL}/api/v1/measurements/batch` con `{measurements: [...]}` (sincronización del buffer)
 
-Cualquier respuesta 2xx confirma la recepción; un error de red o un código distinto se trata como falta de conectividad.
+La credencial se emite en Core mediante un ADMIN activo, ligada a su organización y a los Sensor Nodes autorizados. Se envía sin Bearer y se mantiene en `EDGE_DEVICE_CREDENTIAL`, fuera del repositorio. La rotación o revocación se administra en Core; al cambiarla, reiniciar Edge con el nuevo valor conserva el buffer SQLite.
+
+La confirmación requiere **2xx y un recibo válido**: `readingsAccepted` coincide con las lecturas enviadas y `measurementsCreated + measurementsReused` equivale a dos mediciones por lectura. Una página HTML, redirección, respuesta vacía o recibo incompleto no elimina pendientes. No se siguen redirecciones ni se registran secretos en logs.
+
+Core resuelve `deviceCode` a los UUID de sus sensores autorizados y registra temperatura/humedad en una transacción. Un reintento idéntico responde con los registros existentes; datos distintos en el mismo instante son un conflicto 409. Así, si Core guardó y la respuesta se perdió, Edge puede confirmar después sin duplicar datos. Los errores de autenticación, autorización o conflicto conservan las lecturas pendientes para corregir su causa.
+
+Se preservan microsegundos y se normaliza UTC. Los lotes se envían en bloques de hasta 500 lecturas, sin alterar el tamaño de selección del buffer. Si falla un bloque posterior, Edge conserva todo el lote seleccionado y reintenta; Core confirma idempotentemente los bloques ya recibidos. La sincronización se solicita mediante `POST /api/v1/edge/buffer/sync`; no se introduce un scheduler nuevo en esta entrega.
+
+Configuración de ejemplo: `.env.example` (el proceso recibe las variables del entorno; no carga automáticamente el archivo). Las pruebas del transporte están en `tests/test_cloud_client.py`; ejecutar `python -m pytest` mantiene además la suite unitaria y los escenarios BDD integrados.
+
+### Verificación contra Core real
+
+`tests/test_live_core.py` usa la API real de IAM, configuración, gateways, mediciones y atención de incidentes. Preparar un Core y PostgreSQL **aislados de producción** y definir `MACHINEGUARD_CORE_URL`, `MACHINEGUARD_CORE_ADMIN_EMAIL` y `MACHINEGUARD_CORE_ADMIN_PASSWORD` solo en el entorno del proceso de pruebas. Ejecutar `python -m pytest tests/test_live_core.py`.
+
+Las pruebas crean zonas y sensores con nombres E2E, aprovisionan credenciales limitadas, ejercitan calibración y lectura real, reconocimiento/acción/resolución, pérdida de confirmación y revocación con recuperación del buffer. Revocan las credenciales de pruebas al finalizar. Sin esas variables se omiten explícitamente; el resto de la suite sigue siendo autónomo. No ejecutarlas sobre una organización con datos reales.
