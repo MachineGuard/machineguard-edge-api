@@ -7,6 +7,9 @@ privada, distinta de `EDGE_DEVICE_CREDENTIAL`. `EDGE_ADMIN_ID` identifica al
 administrador técnico en la bitácora (1–64 caracteres alfanuméricos, punto,
 guion o guion bajo). Una clave compartida identifica esa cuenta técnica, no
 demuestra qué persona la utilizó. El identificador no se toma del body.
+El ejemplo deja `EDGE_ADMIN_KEY` vacía: debe configurarse antes de arrancar.
+También se rechaza el texto de ejemplo publicado anteriormente; copiar esa
+configuración no habilita el servicio con una clave conocida.
 
 `EDGE_BIND_HOST` vale `127.0.0.1` por defecto. Para una red dedicada de banco,
 configurar explícitamente la dirección privada de la interfaz necesaria. No

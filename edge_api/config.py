@@ -27,6 +27,8 @@ class Config:
     enable_availability_loop: bool = True
 
     def validate(self) -> None:
+        if self.admin_key == 'replace-with-at-least-32-random-bytes':
+            raise ValueError('EDGE_ADMIN_KEY must not use the published example value')
         if not 32 <= len(self.admin_key.encode('utf-8')) <= 4096:
             raise ValueError('EDGE_ADMIN_KEY must contain 32 to 4096 bytes')
         if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', self.admin_id):
