@@ -11,6 +11,18 @@ El ejemplo deja `EDGE_ADMIN_KEY` vacía: debe configurarse antes de arrancar.
 También se rechaza el texto de ejemplo publicado anteriormente; copiar esa
 configuración no habilita el servicio con una clave conocida.
 
+La administración se permite **solo desde loopback por defecto**, incluso con
+clave válida. `EDGE_ADMIN_ALLOWED_IPS` admite excepciones explícitas como
+`192.168.137.1`, la IP de ejemplo de la laptop en su punto de acceso. Separa
+varias IP IPv4/IPv6 con comas; no admite redes CIDR ni comodines. Loopback sigue
+permitido y las excepciones también requieren la clave administrativa.
+La restricción usa `request.remote_addr`, ignora `X-Forwarded-For` y rechaza
+orígenes no permitidos con 403 **antes de comprobar la clave**. No exponer las
+rutas administrativas mediante un proxy que convierta clientes remotos en
+loopback. Esta lista no cifra HTTP ni autoriza compartir la clave con los nodos.
+`POST /readings` sigue aceptando nodos remotos con su credencial individual;
+la lista administrativa no restringe el origen de las lecturas.
+
 `EDGE_BIND_HOST` vale `127.0.0.1` por defecto. Para una red dedicada de banco,
 configurar explícitamente la dirección privada de la interfaz necesaria. No
 exponer Edge a una red compartida sin HTTPS con certificado validado. El
@@ -22,7 +34,7 @@ servidor de desarrollo sigue siendo el actual; el servidor WSGI queda pendiente.
 | Administración | `X-Edge-Admin-Key`, registro, calibración, consultas (incluido health), sync y emisión/rotación de credenciales |
 | Gateway hacia Core | `X-Device-Credential`; permanece solo en Edge, nunca en el firmware |
 
-Sin credencial o con una inválida: 401. Una credencial de nodo sobre una ruta
+Desde un origen administrativo permitido, sin credencial o con una inválida: 401. Una credencial de nodo sobre una ruta
 administrativa, o una credencial válida usada con otro deviceCode: 403. No se
 permite combinar identidades ni usar la clave administrativa para publicar
 lecturas. Las nuevas rutas de este blueprint exigen administración por defecto.

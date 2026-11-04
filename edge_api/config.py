@@ -1,6 +1,7 @@
 import os
 import math
 import re
+from ipaddress import ip_address, IPv6Address
 from dataclasses import dataclass, field
 
 
@@ -12,6 +13,8 @@ class Config:
     device_credential: str = field(default_factory=lambda: os.getenv("EDGE_DEVICE_CREDENTIAL", ""), repr=False)
     admin_key: str = field(default_factory=lambda: os.getenv("EDGE_ADMIN_KEY", ""), repr=False)
     admin_id: str = field(default_factory=lambda: os.getenv("EDGE_ADMIN_ID", "local-admin"))
+    admin_allowed_ips: tuple = field(default_factory=lambda: tuple(
+        value.strip() for value in os.getenv('EDGE_ADMIN_ALLOWED_IPS', '').split(',') if value.strip()))
     bind_host: str = field(default_factory=lambda: os.getenv("EDGE_BIND_HOST", "127.0.0.1"))
     max_content_bytes: int = field(default_factory=lambda: int(os.getenv("EDGE_MAX_CONTENT_BYTES", "65536")))
     max_temperature_offset: float = field(default_factory=lambda: float(os.getenv("EDGE_MAX_TEMPERATURE_OFFSET", "10")))
@@ -33,6 +36,13 @@ class Config:
             raise ValueError('EDGE_ADMIN_KEY must contain 32 to 4096 bytes')
         if not re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', self.admin_id):
             raise ValueError('EDGE_ADMIN_ID must be a stable administrative identifier')
+        try:
+            allowed = tuple(_canonical_ip(value) for value in self.admin_allowed_ips)
+            if any(value.is_unspecified or value.is_multicast for value in allowed):
+                raise ValueError('Not an administrative client address')
+        except ValueError:
+            raise ValueError('EDGE_ADMIN_ALLOWED_IPS must contain explicit IP addresses, not networks or wildcards') from None
+        self.admin_allowed_ips = tuple(str(value) for value in allowed)
         if not self.bind_host.strip() or self.max_content_bytes < 1:
             raise ValueError('EDGE_BIND_HOST and EDGE_MAX_CONTENT_BYTES must be valid')
         if not 1 <= self.sync_batch_size <= 500 or self.default_sampling_interval < 1:
@@ -43,3 +53,15 @@ class Config:
         for bounds in (self.temperature_range, self.humidity_range):
             if len(bounds) != 2 or not all(math.isfinite(v) for v in bounds) or bounds[0] >= bounds[1]:
                 raise ValueError('Physical ranges must have finite increasing bounds')
+
+    def allows_admin_address(self, remote_addr) -> bool:
+        try:
+            address = _canonical_ip(remote_addr)
+        except ValueError:
+            return False
+        return address.is_loopback or str(address) in self.admin_allowed_ips
+
+
+def _canonical_ip(value):
+    address = ip_address(value)
+    return address.ipv4_mapped or address if isinstance(address, IPv6Address) else address

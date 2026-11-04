@@ -41,6 +41,8 @@ def build_blueprint(c) -> Blueprint:
 
     @bp.before_request
     def authenticate():
+        if request.endpoint != 'edge.register_reading' and not c.config.allows_admin_address(request.remote_addr):
+            raise ForbiddenError('Edge administration is not allowed from this address')
         node_key = request.headers.get('X-Node-Credential')
         admin_key = request.headers.get('X-Edge-Admin-Key')
         if node_key is not None and admin_key is not None:
