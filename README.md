@@ -1,81 +1,31 @@
 # MachineGuard Edge API
 
-## Frontera de nodos y administración (actualización 04/11/2026)
+## Acceso y configuración
 
-El arranque exige `EDGE_ADMIN_KEY` de 32 a 4096 bytes; usar una clave aleatoria
-privada, distinta de `EDGE_DEVICE_CREDENTIAL`. `EDGE_ADMIN_ID` identifica al
-administrador técnico en la bitácora (1–64 caracteres alfanuméricos, punto,
-guion o guion bajo). Una clave compartida identifica esa cuenta técnica, no
-demuestra qué persona la utilizó. El identificador no se toma del body.
-El ejemplo deja `EDGE_ADMIN_KEY` vacía: debe configurarse antes de arrancar.
-También se rechaza el texto de ejemplo publicado anteriormente; copiar esa
-configuración no habilita el servicio con una clave conocida.
+Define las variables en el entorno antes de iniciar; `.env.example` sirve de
+guía y no se carga automáticamente. `EDGE_ADMIN_KEY` debe ser una clave privada
+aleatoria de al menos 32 bytes, distinta de la credencial de Core.
+`EDGE_ADMIN_ID` identifica al administrador en el registro de calibración.
 
-La administración se permite **solo desde loopback por defecto**, incluso con
-clave válida. `EDGE_ADMIN_ALLOWED_IPS` admite excepciones explícitas como
-`192.168.137.1`, la IP de ejemplo de la laptop en su punto de acceso. Separa
-varias IP IPv4/IPv6 con comas; no admite redes CIDR ni comodines. Loopback sigue
-permitido y las excepciones también requieren la clave administrativa.
-La restricción usa `request.remote_addr`, ignora `X-Forwarded-For` y rechaza
-orígenes no permitidos con 403 **antes de comprobar la clave**. No exponer las
-rutas administrativas mediante un proxy que convierta clientes remotos en
-loopback. Esta lista no cifra HTTP ni autoriza compartir la clave con los nodos.
-`POST /readings` sigue aceptando nodos remotos con su credencial individual;
-la lista administrativa no restringe el origen de las lecturas.
+Edge escucha en `127.0.0.1` por defecto. Para recibir nodos por la red del banco,
+configura `EDGE_BIND_HOST` con la IP privada del gateway. La administración
+solo acepta conexiones locales; para acceder por otra IP de la laptop, añádela
+a `EDGE_ADMIN_ALLOWED_IPS` (IP completas separadas por comas, sin rangos).
+En una red compartida se requiere HTTPS con certificado validado.
 
-`EDGE_BIND_HOST` vale `127.0.0.1` por defecto. Para una red dedicada de banco,
-configurar explícitamente la dirección privada de la interfaz necesaria. No
-exponer Edge a una red compartida sin HTTPS con certificado validado. El
-servidor de desarrollo sigue siendo el actual; el servidor WSGI queda pendiente.
+Usa `X-Edge-Admin-Key` para registrar nodos, calibrar, consultar y sincronizar.
+Al registrar un nodo, la respuesta entrega `nodeCredential` una sola vez:
+guárdala en ese nodo y envíala en `X-Node-Credential` al publicar `/readings`
+con su `deviceCode`. No combines ambas claves ni entregues la de Core al nodo.
+Los nodos ya registrados necesitan emitir su credencial; la base conserva sus
+datos. La ruta de emisión también permite cambiar la clave e invalida la anterior.
 
-| Consumidor | Credencial y alcance |
-|---|---|
-| Nodo | `X-Node-Credential`, solo `POST /api/v1/edge/readings` para su `deviceCode` |
-| Administración | `X-Edge-Admin-Key`, registro, calibración, consultas (incluido health), sync y emisión/rotación de credenciales |
-| Gateway hacia Core | `X-Device-Credential`; permanece solo en Edge, nunca en el firmware |
-
-Desde un origen administrativo permitido, sin credencial o con una inválida: 401. Una credencial de nodo sobre una ruta
-administrativa, o una credencial válida usada con otro deviceCode: 403. No se
-permite combinar identidades ni usar la clave administrativa para publicar
-lecturas. Las nuevas rutas de este blueprint exigen administración por defecto.
-
-El registro administrativo `POST /sensor-nodes` conserva los campos de respuesta
-del perfil y añade `nodeCredential`, aleatoria e individual. Se entrega una sola
-vez, con `Cache-Control: no-store`; almacenar únicamente en la configuración
-privada del nodo, sin guardar respuestas en logs, capturas ni historial Git.
-Las consultas nunca devuelven secretos ni hashes. Para emitir una credencial a
-un nodo anterior o rotarla: `POST /sensor-nodes/{deviceCode}/credentials`, con la
-clave administrativa; devuelve `{deviceCode, nodeCredential}` y no-store. La
-anterior deja de autenticar nuevas solicitudes; una ya autenticada puede acabar.
-No hay compatibilidad anónima. Un nodo anterior sin credencial sigue conservado,
-pero no puede enviar hasta su aprovisionamiento administrativo.
-
-SQLite evoluciona de `user_version=0` a 1 mediante una transacción: agrega
-`node_credentials` (hash SHA-256 del secreto aleatorio) y `calibration_changes`.
-Conserva tablas, IDs, lecturas, pendientes y estado previo. Una versión posterior
-desconocida impide arrancar; no se recrea una base para actualizarla. Conservar
-una copia privada de la base antes de actualizar una instalación existente.
-
-`GET /calibration/{deviceCode}/changes?limit=50` consulta los últimos cambios
-en orden ascendente (limit entre 1 y 500). Registro y actualización de offsets
-guardan, en la misma transacción, actor administrativo, hora UTC y valores
-anteriores/nuevos. Una solicitud rechazada no modifica el perfil ni su bitácora.
-
-El límite de cuerpo es `EDGE_MAX_CONTENT_BYTES=65536` (413 al superarlo).
-JSON no finito —NaN, Infinity y desbordamientos como 1e999, incluso en campos
-no usados—, tipos incorrectos y fechas desbordadas dan 400. `batchSize` acepta
-únicamente enteros JSON de 1 a 500; sync sin cuerpo conserva su valor por defecto.
-Los offsets están limitados por `EDGE_MAX_TEMPERATURE_OFFSET=10` y
-`EDGE_MAX_HUMIDITY_OFFSET=20`. Los rangos físicos configurables son
-`EDGE_TEMPERATURE_MIN/MAX=-40/80` y `EDGE_HUMIDITY_MIN/MAX=0/100`.
-La plausibilidad se verifica antes y después de calibrar; fuera de rango se
-conserva DISCARDED (202), no se envía ni se usa para restaurar ONLINE o refrescar
-el último contacto válido. No se revalúan ni recalibran lecturas ya guardadas.
-
-La política temporal previa y el sync manual siguen vigentes. Esta actualización
-no acredita firmware, autonomía, detección de vigencia en Core ni banco físico.
-Las pruebas BDD conservan sus escenarios y usan identidades de nodo/administrador;
-el caso de deviceCode no autorizado responde 403 en este contrato.
+Sin credencial válida se responde 401; un origen o deviceCode no autorizado,
+403. JSON inválido devuelve 400 y un cuerpo mayor que `EDGE_MAX_CONTENT_BYTES`
+(65536 por defecto), 413. `batchSize` debe ser un entero de 1 a 500. Por defecto,
+los offsets admiten ±10 °C y ±20 % HR; una lectura calibrada fuera de −40..80 °C
+o 0..100 % HR se descarta (202) y no se envía a Core. Los límites se configuran
+con las variables indicadas en `.env.example`.
 
 Bounded Context **Edge Processing** de MachineGuard. Se ejecuta en el Edge Gateway (Raspberry Pi o equivalente) dentro de la red del cliente: recibe las lecturas de los nodos ESP32, descarta las físicamente implausibles, aplica el Calibration Offset de cada nodo y las publica hacia la RESTful API central. Si no hay conectividad, las conserva en un Local Buffer y las sincroniza en orden cronológico al volver el enlace.
 
@@ -122,10 +72,12 @@ Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en
 | GET | `/readings/discarded` | Lecturas descartadas por implausibilidad |
 | GET | `/calibration/{deviceCode}` | Calibration Profile del nodo |
 | PUT | `/calibration/{deviceCode}/offset` | Actualiza el Calibration Offset (solo afecta lecturas posteriores) |
+| GET | `/calibration/{deviceCode}/changes` | Consulta quién cambió los offsets, cuándo y sus valores |
 | GET | `/calibration/{deviceCode}/plausibility-range` | Rango de plausibilidad configurado |
 | GET | `/buffer` | Estado del Local Buffer (pendientes, última sincronización) |
 | POST | `/buffer/sync` | Fuerza la sincronización del buffer |
 | POST | `/sensor-nodes` | Registra un Sensor Node en el gateway |
+| POST | `/sensor-nodes/{deviceCode}/credentials` | Emite o cambia la credencial de un nodo registrado |
 | GET | `/sensor-nodes` | Estado de conectividad de los nodos |
 | GET | `/sensor-nodes/offline` | Nodos detectados como Offline |
 | GET | `/health` | Estado del servicio |
