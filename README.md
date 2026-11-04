@@ -1,5 +1,10 @@
 # MachineGuard Edge API
 
+Bounded Context **Edge Processing** de MachineGuard. Se ejecuta en el Edge Gateway (Raspberry Pi o equivalente) dentro de la red del cliente: recibe las lecturas de los nodos ESP32, descarta las físicamente implausibles, aplica el Calibration Offset de cada nodo y las publica hacia la RESTful API central. Si no hay conectividad, las conserva en un Local Buffer y las sincroniza en orden cronológico al volver el enlace.
+
+- Flask + Peewee ORM + SQLite
+- Arquitectura DDD por capas: `domain`, `application`, `infrastructure`, `interfaces`
+
 ## Acceso y configuración
 
 Define las variables en el entorno antes de iniciar; `.env.example` sirve de
@@ -26,11 +31,6 @@ Sin credencial válida se responde 401; un origen o deviceCode no autorizado,
 los offsets admiten ±10 °C y ±20 % HR; una lectura calibrada fuera de −40..80 °C
 o 0..100 % HR se descarta (202) y no se envía a Core. Los límites se configuran
 con las variables indicadas en `.env.example`.
-
-Bounded Context **Edge Processing** de MachineGuard. Se ejecuta en el Edge Gateway (Raspberry Pi o equivalente) dentro de la red del cliente: recibe las lecturas de los nodos ESP32, descarta las físicamente implausibles, aplica el Calibration Offset de cada nodo y las publica hacia la RESTful API central. Si no hay conectividad, las conserva en un Local Buffer y las sincroniza en orden cronológico al volver el enlace.
-
-- Flask + Peewee ORM + SQLite
-- Arquitectura DDD por capas: `domain`, `application`, `infrastructure`, `interfaces`
 
 ## Ejecución
 
