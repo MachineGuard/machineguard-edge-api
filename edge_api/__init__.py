@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from typing import Callable, Optional
 
 from flask import Flask, jsonify
+from flask.json.provider import DefaultJSONProvider
+import math
 
 from .application.command_services import (
     ApplyCalibrationCommandService,
@@ -14,6 +16,7 @@ from .application.command_services import (
     SyncLocalBufferCommandService,
 )
 from .application.errors import ApplicationError
+from .application.node_credentials import NodeCredentialService
 from .application.query_services import (
     GetCalibrationProfileQueryService,
     GetLocalBufferQueryService,
@@ -29,10 +32,23 @@ from .infrastructure.repositories import (
     LocalBufferRepository,
     OfflineNodeRepository,
     SensorReadingRepository,
+    NodeCredentialRepository,
+    CalibrationChangeRepository,
 )
 from .interfaces.controllers import build_blueprint
 
 logger = logging.getLogger(__name__)
+
+
+class StrictJSONProvider(DefaultJSONProvider):
+    def loads(self, value, **kwargs):
+        def invalid(_value):
+            raise ValueError('Non-finite JSON number')
+        def finite_float(number):
+            result = float(number)
+            return result if math.isfinite(result) else invalid(number)
+        kwargs.update(parse_constant=invalid, parse_float=finite_float)
+        return super().loads(value, **kwargs)
 
 
 def utc_now() -> datetime:
@@ -45,6 +61,7 @@ def create_app(
     clock: Callable[[], datetime] = utc_now,
 ) -> Flask:
     config = config or Config()
+    config.validate()
     init_database(config.database_path)
     cloud = cloud or HttpCloudClient(config.cloud_base_url, config.device_credential)
 
@@ -53,11 +70,15 @@ def create_app(
     buffer = LocalBufferRepository(config.gateway_id, config.buffer_capacity)
     offline_nodes = OfflineNodeRepository()
     availability = NodeAvailabilityService()
+    changes = CalibrationChangeRepository()
+    credentials = NodeCredentialService(profiles, NodeCredentialRepository(), clock)
 
     services = SimpleNamespace(
         config=config,
-        register_node=RegisterSensorNodeCommandService(profiles, config, clock),
-        apply_calibration=ApplyCalibrationCommandService(profiles, clock),
+        register_node=RegisterSensorNodeCommandService(profiles, config, clock, credentials, changes),
+        apply_calibration=ApplyCalibrationCommandService(profiles, clock, config, changes),
+        credentials=credentials,
+        calibration_changes=changes,
         capture=CaptureSensorReadingCommandService(
             profiles, readings, buffer, offline_nodes, ReadingCalibrationService(), cloud, clock
         ),
@@ -70,6 +91,8 @@ def create_app(
     )
 
     app = Flask(__name__)
+    app.json = StrictJSONProvider(app)
+    app.config['MAX_CONTENT_LENGTH'] = config.max_content_bytes
     app.config["services"] = services
     app.register_blueprint(build_blueprint(services))
 

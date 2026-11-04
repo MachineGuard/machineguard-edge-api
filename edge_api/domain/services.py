@@ -20,6 +20,11 @@ class ReadingCalibrationService:
             reading.discard(profile.id)
             return reading
         reading.apply_calibration(profile)
+        if (not profile.temperature_range.contains(reading.calibrated_temperature)
+                or not profile.humidity_range.contains(reading.calibrated_humidity)):
+            reading.discard(profile.id)
+            reading.calibrated_temperature = None
+            reading.calibrated_humidity = None
         return reading
 
 

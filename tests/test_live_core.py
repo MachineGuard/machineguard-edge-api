@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+import secrets
+from conftest import AuthenticatedEdgeClient
 
 from edge_api import create_app
 from edge_api.config import Config
@@ -49,9 +51,9 @@ def live(tmp_path):
         return result
 
     gateway = provision()
-    config = Config(database_path=str(tmp_path / "live-edge.db"), gateway_id=gateway["gateway"]["id"],
+    config = Config(database_path=str(tmp_path / "live-edge.db"), gateway_id=gateway["gateway"]["id"], admin_key=secrets.token_urlsafe(32),
                     cloud_base_url=base, device_credential=gateway["credential"], enable_availability_loop=False)
-    client = create_app(config).test_client()
+    client = AuthenticatedEdgeClient(create_app(config).test_client(), config.admin_key)
     assert client.post("/api/v1/edge/sensor-nodes", json={"deviceCode": code}).status_code == 201
     assert client.put(f"/api/v1/edge/calibration/{code}/offset",
                       json={"temperatureOffset": -0.5, "humidityOffset": 2}).status_code == 200
@@ -109,7 +111,7 @@ class LoseFirstConfirmation(HttpCloudClient):
 
 def test_real_core_response_loss_is_recovered_without_duplicate_measurements(live):
     cloud = LoseFirstConfirmation(live.config.cloud_base_url, live.config.device_credential)
-    client = create_app(live.config, cloud=cloud).test_client()
+    client = AuthenticatedEdgeClient(create_app(live.config, cloud=cloud).test_client(), live.config.admin_key, live.edge.tokens)
     assert live.send(client)["status"] == "CALIBRATED"
     assert client.get("/api/v1/edge/buffer").get_json()["pendingCount"] == 1
     assert live.history_count() == 2
@@ -125,6 +127,24 @@ def test_revoked_gateway_keeps_pending_data_and_reprovisioning_recovers_it(live)
     assert live.edge.get("/api/v1/edge/buffer").get_json()["pendingCount"] == 1
     assert live.history_count() == 0
     renewed = live.provision()
-    restarted = create_app(replace(live.config, device_credential=renewed["credential"])).test_client()
+    restarted = AuthenticatedEdgeClient(create_app(replace(live.config, device_credential=renewed["credential"])).test_client(),
+                                         live.config.admin_key, live.edge.tokens)
     assert restarted.post("/api/v1/edge/buffer/sync").get_json()["pending"] == 0
     assert live.history_count() == 2
+
+
+def test_edge_boundary_rejections_never_reach_real_core(live):
+    code = next(iter(live.edge.tokens))
+    raw_client = live.edge.client
+    payload = {'deviceCode': code, 'temperature': 5, 'humidity': 50}
+    assert raw_client.post('/api/v1/edge/readings', json=payload).status_code == 401
+    headers = {'X-Node-Credential': live.edge.tokens[code]}
+    assert raw_client.post('/api/v1/edge/readings', json={**payload, 'deviceCode': 'other'}, headers=headers).status_code == 403
+    assert raw_client.post('/api/v1/edge/buffer/sync', json={}, headers=headers).status_code == 403
+    invalid = '{"deviceCode":"' + code + '","temperature":Infinity,"humidity":50}'
+    assert raw_client.post('/api/v1/edge/readings', data=invalid, content_type='application/json', headers=headers).status_code == 400
+    # The fixture has humidity offset +2: plausible raw input becomes implausible.
+    assert live.edge.post('/api/v1/edge/readings', json={**payload, 'humidity': 99.5}).status_code == 202
+    assert live.history_count() == 0
+    assert live.edge.get('/api/v1/edge/buffer').json['pendingCount'] == 0
+    assert live.core('GET', '/api/v1/alerts', params={'monitoringZoneId': live.zone}) == []

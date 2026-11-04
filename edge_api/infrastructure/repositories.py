@@ -18,7 +18,32 @@ from .models import (
     OfflineNodeModel,
     SensorReadingModel,
     SyncStateModel,
+    NodeCredentialModel,
+    CalibrationChangeModel,
 )
+
+
+class NodeCredentialRepository:
+    def save(self, profile_id, credential_hash, issued_at):
+        (NodeCredentialModel.insert(profile=profile_id, credential_hash=credential_hash, issued_at=issued_at)
+         .on_conflict(conflict_target=[NodeCredentialModel.profile], update={
+             NodeCredentialModel.credential_hash: credential_hash, NodeCredentialModel.issued_at: issued_at}).execute())
+
+    def find_device_code(self, credential_hash):
+        row = NodeCredentialModel.get_or_none(NodeCredentialModel.credential_hash == credential_hash)
+        return row.profile.sensor_node_id if row else None
+
+
+class CalibrationChangeRepository:
+    def record(self, profile, old_offset, actor, changed_at):
+        CalibrationChangeModel.create(profile=profile.id, actor=actor, changed_at=changed_at,
+            old_temperature_offset=old_offset.temperature_offset, old_humidity_offset=old_offset.humidity_offset,
+            new_temperature_offset=profile.offset.temperature_offset, new_humidity_offset=profile.offset.humidity_offset)
+
+    def list_for_profile(self, profile_id, limit):
+        rows = list(CalibrationChangeModel.select().where(CalibrationChangeModel.profile == profile_id)
+                    .order_by(CalibrationChangeModel.id.desc()).limit(limit))
+        return list(reversed(rows))
 
 
 class CalibrationProfileRepository:
@@ -101,7 +126,8 @@ class SensorReadingRepository:
     def last_captured_at(self, sensor_node_id: str) -> Optional[datetime]:
         m = (
             SensorReadingModel.select(SensorReadingModel.captured_at)
-            .where(SensorReadingModel.sensor_node_id == sensor_node_id)
+            .where((SensorReadingModel.sensor_node_id == sensor_node_id)
+                   & SensorReadingModel.status.in_([ReadingStatus.CALIBRATED.value, ReadingStatus.SYNCED.value]))
             .order_by(SensorReadingModel.captured_at.desc())
             .first()
         )

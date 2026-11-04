@@ -1,6 +1,10 @@
-from flask import Blueprint, jsonify, request
+import hashlib
+import hmac
+from flask import Blueprint, jsonify, request, g
+from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
 from ..application.errors import ValidationError
+from ..application.node_credentials import AuthenticationError, ForbiddenError
 from ..domain.commands import (
     ApplyCalibrationCommand,
     CaptureSensorReadingCommand,
@@ -12,8 +16,13 @@ from ..domain.commands import (
 from . import resources as res
 
 
-def _json_body() -> dict:
-    body = request.get_json(silent=True)
+def _json_body(optional=False) -> dict:
+    if optional and not request.get_data():
+        return {}
+    try:
+        body = request.get_json()
+    except (BadRequest, UnsupportedMediaType):
+        raise ValidationError('El cuerpo debe ser un JSON válido')
     if not isinstance(body, dict):
         raise ValidationError("El cuerpo debe ser un JSON válido")
     return body
@@ -30,10 +39,32 @@ def build_blueprint(c) -> Blueprint:
     """`c` es el contenedor de servicios armado en create_app."""
     bp = Blueprint("edge", __name__, url_prefix="/api/v1/edge")
 
+    @bp.before_request
+    def authenticate():
+        node_key = request.headers.get('X-Node-Credential')
+        admin_key = request.headers.get('X-Edge-Admin-Key')
+        if node_key is not None and admin_key is not None:
+            raise AuthenticationError('Do not combine node and administrative credentials')
+        if request.endpoint == 'edge.register_reading':
+            if admin_key is not None:
+                raise ForbiddenError('A node credential is required')
+            g.node_device_code = c.credentials.authenticate(node_key)
+        else:
+            # New blueprint routes are administrative unless explicitly allowed above.
+            if node_key is not None:
+                raise ForbiddenError('Node credentials cannot administer Edge')
+            if (not admin_key or len(admin_key) > 4096 or not hmac.compare_digest(
+                    hashlib.sha256(admin_key.encode()).digest(), hashlib.sha256(c.config.admin_key.encode()).digest())):
+                raise AuthenticationError('Invalid administrative credential')
+            g.admin_actor = c.config.admin_id
+
     # SensorReadingController
     @bp.post("/readings")
     def register_reading():
-        reading = c.capture.handle(CaptureSensorReadingCommand(**res.raw_reading_resource_to_values(_json_body())))
+        values = res.raw_reading_resource_to_values(_json_body())
+        if values['device_code'] != g.node_device_code:
+            raise ForbiddenError('Credential does not authorize this deviceCode')
+        reading = c.capture.handle(CaptureSensorReadingCommand(**values))
         status = 201 if reading.status.value != "DISCARDED" else 202
         return jsonify(res.calibrated_reading_resource(reading)), status
 
@@ -59,9 +90,17 @@ def build_blueprint(c) -> Blueprint:
                 device_code,
                 res.require_number(body, "temperatureOffset"),
                 res.require_number(body, "humidityOffset"),
-            )
+            ), actor=g.admin_actor
         )
         return jsonify(res.calibration_profile_resource(profile))
+
+    @bp.get('/calibration/<device_code>/changes')
+    def calibration_changes(device_code):
+        profile = c.calibration_query.handle(GetCalibrationProfileQuery(device_code))
+        return jsonify([{'actor': row.actor, 'changedAt': res.iso(row.changed_at),
+            'oldTemperatureOffset': row.old_temperature_offset, 'oldHumidityOffset': row.old_humidity_offset,
+            'newTemperatureOffset': row.new_temperature_offset, 'newHumidityOffset': row.new_humidity_offset}
+            for row in c.calibration_changes.list_for_profile(profile.id, _limit())])
 
     @bp.get("/calibration/<device_code>/plausibility-range")
     def get_plausibility_range(device_code):
@@ -75,23 +114,27 @@ def build_blueprint(c) -> Blueprint:
 
     @bp.post("/buffer/sync")
     def sync_buffer():
-        body = request.get_json(silent=True) or {}
-        batch_size = int(body.get("batchSize", c.config.sync_batch_size))
+        body = _json_body(optional=True)
+        batch_size = res.require_integer(body, 'batchSize', c.config.sync_batch_size, maximum=500)
         return jsonify(c.sync.handle(SyncLocalBufferCommand(batch_size)))
 
     # NodeStatusController
     @bp.post("/sensor-nodes")
     def register_node():
         body = _json_body()
-        profile = c.register_node.handle(
+        profile, credential = c.register_node.handle(
             RegisterSensorNodeCommand(
-                device_code=str(body.get("deviceCode", "")),
-                sampling_interval_seconds=int(body.get("samplingIntervalSeconds", c.config.default_sampling_interval)),
+                device_code=res.require_device_code(body),
+                sampling_interval_seconds=res.require_integer(body, 'samplingIntervalSeconds', c.config.default_sampling_interval),
                 temperature_offset=res.require_number(body, "temperatureOffset", 0.0),
                 humidity_offset=res.require_number(body, "humidityOffset", 0.0),
-            )
+            ), actor=g.admin_actor
         )
-        return jsonify(res.calibration_profile_resource(profile)), 201
+        return jsonify({**res.calibration_profile_resource(profile), 'nodeCredential': credential}), 201, {'Cache-Control': 'no-store'}
+
+    @bp.post('/sensor-nodes/<device_code>/credentials')
+    def rotate_node_credential(device_code):
+        return jsonify({'deviceCode': device_code, 'nodeCredential': c.credentials.issue(device_code)}), 200, {'Cache-Control': 'no-store'}
 
     @bp.get("/sensor-nodes")
     def nodes_status():

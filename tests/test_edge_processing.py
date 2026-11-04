@@ -39,7 +39,7 @@ def test_reading_keeps_capture_timestamp_of_the_node(client, clock):
 
 def test_future_timestamp_and_unknown_node_are_rejected(client, clock):
     assert post_reading(client, captured_at=clock.now + timedelta(hours=1)).status_code == 400
-    assert post_reading(client, device="ghost").status_code == 404
+    assert post_reading(client, device="ghost").status_code == 403
     assert client.post("/api/v1/edge/readings", json={"deviceCode": "esp32-01"}).status_code == 400
 
 
