@@ -1,5 +1,6 @@
 from peewee import (
     AutoField,
+    BooleanField,
     CharField,
     DateTimeField,
     FloatField,
@@ -44,6 +45,8 @@ class SensorReadingModel(BaseModel):
     calibrated_humidity = FloatField(null=True)
     captured_at = DateTimeField(index=True)
     status = CharField()
+    sample_id = CharField(null=True, max_length=100)
+    captured_at_supplied = BooleanField(default=False)
 
     class Meta:
         table_name = "sensor_readings"
@@ -112,13 +115,21 @@ def init_database(path: str) -> None:
         database.close()
     database.init(path)
     database.connect(reuse_if_open=True)
-    # Version 0 is the published schema. This additive migration preserves all
-    # readings/buffer entries and leaves legacy nodes uncredentialed until provisioned.
+    # Additive upgrades: 0 -> 1 credentials/audit, 1 -> 2 sample identity.
+    # Legacy readings retain NULL identities and all their original evidence.
     with database.atomic('IMMEDIATE'):
         version = database.pragma('user_version')
-        if version > 1:
+        if version > 2:
             raise ValueError('Unsupported Edge database schema version')
         database.create_tables(ALL_MODELS)
         if version == 0:
             database.create_tables([NodeCredentialModel, CalibrationChangeModel])
-            database.pragma('user_version', 1)
+        if version < 2:
+            columns = {column.name for column in database.get_columns('sensor_readings')}
+            if 'sample_id' not in columns:
+                database.execute_sql('ALTER TABLE sensor_readings ADD COLUMN sample_id TEXT')
+            if 'captured_at_supplied' not in columns:
+                database.execute_sql('ALTER TABLE sensor_readings ADD COLUMN captured_at_supplied INTEGER NOT NULL DEFAULT 0')
+            database.execute_sql('CREATE UNIQUE INDEX IF NOT EXISTS uq_sensor_readings_node_sample '
+                                 'ON sensor_readings(sensor_node_id, sample_id) WHERE sample_id IS NOT NULL')
+            database.pragma('user_version', 2)

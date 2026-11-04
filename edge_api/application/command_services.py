@@ -1,6 +1,7 @@
 import logging
 import math
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Callable
 
 from ..config import Config
@@ -101,11 +102,16 @@ class CaptureSensorReadingCommandService:
         calibration: ReadingCalibrationService,
         cloud: CloudGateway,
         clock: Clock,
+        config: Config,
     ):
         self.profiles, self.readings, self.buffer = profiles, readings, buffer
         self.offline_nodes, self.calibration, self.cloud, self.clock = offline_nodes, calibration, cloud, clock
+        self.config = config
 
     def handle(self, command: CaptureSensorReadingCommand) -> SensorReading:
+        if (not isinstance(command.sample_id, str)
+                or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,63}-(0|[1-9][0-9]{0,19})', command.sample_id) is None):
+            raise ValidationError('sampleId debe tener formato bootId-secuencia (bootId de 1..64 caracteres)')
         profile = self.profiles.find_by_sensor_node_id(command.device_code)
         if profile is None:
             raise NotFoundError(f"El nodo {command.device_code} no está registrado")
@@ -113,11 +119,24 @@ class CaptureSensorReadingCommandService:
         raw = RawReading(command.temperature, command.humidity, command.captured_at or now)
         if not math.isfinite(raw.temperature) or not math.isfinite(raw.humidity):
             raise ValidationError('Reading values must be finite')
-        if not raw.has_valid_timestamp(now):
-            raise ValidationError("capturedAt no puede estar en el futuro")
-
-        with database.atomic():
+        supplied = command.captured_at is not None
+        with database.atomic('IMMEDIATE'):
+            existing = self.readings.find_by_sample(command.device_code, command.sample_id)
+            if existing is not None:
+                if (existing.raw.temperature != raw.temperature or existing.raw.humidity != raw.humidity
+                        or existing.captured_at_supplied != supplied
+                        or (supplied and existing.raw.captured_at != raw.captured_at)):
+                    raise ConflictError('sampleId ya existe con otros datos')
+                return existing
+            if raw.captured_at < self.config.minimum_capture:
+                raise ValidationError('capturedAt es anterior a la fecha mínima configurada')
+            if raw.captured_at > now + timedelta(seconds=self.config.max_future_seconds):
+                raise ValidationError('capturedAt supera la tolerancia de tiempo futuro')
+            if raw.captured_at < now - timedelta(days=self.config.max_reading_age_days):
+                raise ValidationError('capturedAt supera la antigüedad máxima configurada')
             reading = self.calibration.process(command.device_code, raw, profile)
+            reading.sample_id = command.sample_id
+            reading.captured_at_supplied = supplied
             self.readings.save(reading)
             if reading.status == ReadingStatus.DISCARDED:
                 return reading

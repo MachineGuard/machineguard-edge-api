@@ -15,14 +15,15 @@ def iso(dt: Optional[datetime]) -> Optional[str]:
 
 def parse_instant(value) -> Optional[datetime]:
     """Convierte un ISO-8601 a datetime UTC naive (la base local guarda todo en UTC)."""
-    if value is None:
-        return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        if not isinstance(value, str):
+            raise ValueError('A capture must be text')
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError('A capture requires a timezone')
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     except (ValueError, TypeError, OverflowError):
-        raise ValidationError("capturedAt debe ser una fecha ISO-8601")
+        raise ValidationError("capturedAt debe ser una fecha ISO-8601 con zona explícita")
     return parsed
 
 
@@ -61,13 +62,15 @@ def raw_reading_resource_to_values(body: dict) -> dict:
         "device_code": device_code,
         "temperature": require_number(body, "temperature"),
         "humidity": require_number(body, "humidity"),
-        "captured_at": parse_instant(body.get("capturedAt")),
+        "captured_at": parse_instant(body['capturedAt']) if 'capturedAt' in body else None,
+        "sample_id": body.get('sampleId'),
     }
 
 
 def calibrated_reading_resource(r: SensorReading) -> dict:
     return {
         "id": r.id,
+        "sampleId": r.sample_id,
         "deviceCode": r.sensor_node_id,
         "rawTemperature": r.raw.temperature,
         "rawHumidity": r.raw.humidity,

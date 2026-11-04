@@ -148,3 +148,21 @@ def test_edge_boundary_rejections_never_reach_real_core(live):
     assert live.history_count() == 0
     assert live.edge.get('/api/v1/edge/buffer').json['pendingCount'] == 0
     assert live.core('GET', '/api/v1/alerts', params={'monitoringZoneId': live.zone}) == []
+
+
+def test_sample_retry_without_node_clock_survives_restart_and_reaches_core_once(live):
+    code = next(iter(live.edge.tokens))
+    headers = {'X-Node-Credential': live.edge.tokens[code]}
+    payload = {'deviceCode': code, 'sampleId': 'clockless-1', 'temperature': 11.5, 'humidity': 48}
+    first = live.edge.client.post('/api/v1/edge/readings', json=payload, headers=headers)
+    assert first.status_code == 201 and first.json['status'] == 'SYNCED'
+    live.edge.put(f'/api/v1/edge/calibration/{code}/offset', json={'temperatureOffset': 1, 'humidityOffset': 0})
+    restarted = create_app(live.config).test_client()
+    again = restarted.post('/api/v1/edge/readings', json=payload, headers=headers)
+    assert again.status_code == 201 and again.json == first.json
+    assert live.history_count() == 2
+    assert len(live.core('GET', '/api/v1/alerts', params={'monitoringZoneId': live.zone})) == 1
+    future = (datetime.now(timezone.utc) + timedelta(seconds=120)).isoformat()
+    invalid = restarted.post('/api/v1/edge/readings', headers=headers,
+        json={**payload, 'sampleId': 'clockless-2', 'capturedAt': future})
+    assert invalid.status_code == 400 and live.history_count() == 2

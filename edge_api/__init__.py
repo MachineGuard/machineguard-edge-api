@@ -83,7 +83,7 @@ def create_app(
         credentials=credentials,
         calibration_changes=changes,
         capture=CaptureSensorReadingCommandService(
-            profiles, readings, buffer, offline_nodes, ReadingCalibrationService(), cloud, clock
+            profiles, readings, buffer, offline_nodes, ReadingCalibrationService(), cloud, clock, config
         ),
         sync=SyncLocalBufferCommandService(readings, buffer, BufferSynchronizationService(), cloud, clock),
         detect_offline=DetectOfflineNodesCommandService(profiles, readings, offline_nodes, availability, clock),

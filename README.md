@@ -32,6 +32,28 @@ los offsets admiten ±10 °C y ±20 % HR; una lectura calibrada fuera de −40..
 o 0..100 % HR se descarta (202) y no se envía a Core. Los límites se configuran
 con las variables indicadas en `.env.example`.
 
+### Muestras y hora del nodo
+
+Cada lectura requiere `sampleId` con formato `bootId-secuencia`: un bootId nuevo
+al reiniciar (1–64 caracteres; empieza por letra o dígito y admite guiones o
+guiones bajos) y una secuencia creciente de hasta 20 dígitos, sin ceros iniciales.
+Ejemplo de cuerpo:
+
+```json
+{"deviceCode":"ESP32-01","sampleId":"bootA-1","temperature":5,"humidity":50}
+```
+
+Sin hora NTP válida, omite `capturedAt`; Edge asigna la hora UTC una sola vez.
+Si lo envías, debe incluir zona (`Z` u offset). Por defecto se aceptan hasta
+60 s de adelanto, 30 días de antigüedad y fechas desde el 01/01/2026 UTC.
+Configura estos límites con `EDGE_MAX_FUTURE_SECONDS`,
+`EDGE_MAX_READING_AGE_DAYS` y `EDGE_MIN_CAPTURED_AT`; una fecha inválida devuelve 400 con motivo.
+
+Para reintentar, conserva el mismo sampleId y cuerpo, incluso si después obtienes
+hora NTP. Edge devuelve la fila guardada y su estado actual, sin recalibrar ni
+reenviar; cambiar sus valores o fecha devuelve 409. Tras actualizar SQLite,
+las lecturas anteriores se conservan con `sampleId=null`; no se les inventa una identidad.
+
 ## Ejecución
 
 ```bash
@@ -67,7 +89,7 @@ Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| POST | `/readings` | Registra una lectura del nodo (`deviceCode`, `temperature`, `humidity`, `capturedAt` opcional). 201 si se calibra, 202 si se descarta |
+| POST | `/readings` | Registra una muestra (`deviceCode`, `sampleId`, `temperature`, `humidity`, `capturedAt` opcional). 201 si se calibra, 202 si se descarta |
 | GET | `/readings` | Últimas lecturas procesadas |
 | GET | `/readings/discarded` | Lecturas descartadas por implausibilidad |
 | GET | `/calibration/{deviceCode}` | Calibration Profile del nodo |

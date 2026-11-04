@@ -3,6 +3,7 @@ import os
 import runpy
 import secrets
 import sqlite3
+import uuid
 
 import pytest
 
@@ -35,7 +36,7 @@ def boundary(tmp_path, monkeypatch, cloud, clock):
 
 def send(client, tokens, code='node-a', **values):
     return client.post(BASE + '/readings', headers={'X-Node-Credential': tokens[code]},
-                       json={'deviceCode': code, 'temperature': 5, 'humidity': 50, **values})
+                       json={'deviceCode': code, 'sampleId': uuid.uuid4().hex+'-1', 'temperature': 5, 'humidity': 50, **values})
 
 
 @pytest.mark.parametrize('credential', [None, 'invalid-node-credential'])
@@ -250,7 +251,7 @@ def test_migration_preserves_legacy_evidence_and_needs_explicit_node_provisionin
     c = create_app(config, cloud, clock).test_client()
     after = {t._meta.table_name: list(database.execute_sql('SELECT * FROM '+t._meta.table_name)) for t in tables}
     assert before == after
-    assert database.pragma('user_version') == 1
+    assert database.pragma('user_version') == 2
     assert c.post(BASE+'/readings', json={'deviceCode':'legacy','temperature':5,'humidity':50}).status_code == 401
     admin = {'X-Edge-Admin-Key':key}
     issued = c.post(BASE+'/sensor-nodes/legacy/credentials', headers=admin)
@@ -258,6 +259,6 @@ def test_migration_preserves_legacy_evidence_and_needs_explicit_node_provisionin
     c = create_app(config, cloud, clock).test_client()
     assert c.get(BASE+'/buffer', headers=admin).json['pendingCount'] == 1
     r = c.post(BASE+'/readings', headers={'X-Node-Credential':issued.json['nodeCredential']},
-               json={'deviceCode':'legacy','temperature':5,'humidity':50})
+               json={'deviceCode':'legacy','sampleId':'legacyboot-1','temperature':5,'humidity':50})
     assert r.status_code == 201
     assert c.get(BASE+'/buffer', headers=admin).json['pendingCount'] == 2

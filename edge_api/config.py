@@ -3,6 +3,7 @@ import math
 import re
 from ipaddress import ip_address, IPv6Address
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 
 @dataclass
@@ -19,6 +20,9 @@ class Config:
     max_content_bytes: int = field(default_factory=lambda: int(os.getenv("EDGE_MAX_CONTENT_BYTES", "65536")))
     max_temperature_offset: float = field(default_factory=lambda: float(os.getenv("EDGE_MAX_TEMPERATURE_OFFSET", "10")))
     max_humidity_offset: float = field(default_factory=lambda: float(os.getenv("EDGE_MAX_HUMIDITY_OFFSET", "20")))
+    max_future_seconds: int = field(default_factory=lambda: int(os.getenv('EDGE_MAX_FUTURE_SECONDS', '60')))
+    max_reading_age_days: int = field(default_factory=lambda: int(os.getenv('EDGE_MAX_READING_AGE_DAYS', '30')))
+    min_captured_at: str = field(default_factory=lambda: os.getenv('EDGE_MIN_CAPTURED_AT', '2026-01-01T00:00:00Z'))
     buffer_capacity: int = field(default_factory=lambda: int(os.getenv("EDGE_BUFFER_CAPACITY", "10000")))
     sync_batch_size: int = field(default_factory=lambda: int(os.getenv("EDGE_SYNC_BATCH_SIZE", "100")))
     default_sampling_interval: int = field(default_factory=lambda: int(os.getenv("EDGE_SAMPLING_INTERVAL", "60")))
@@ -47,6 +51,14 @@ class Config:
             raise ValueError('EDGE_BIND_HOST and EDGE_MAX_CONTENT_BYTES must be valid')
         if not 1 <= self.sync_batch_size <= 500 or self.default_sampling_interval < 1:
             raise ValueError('Invalid sampling interval or EDGE_SYNC_BATCH_SIZE (1..500)')
+        if self.max_future_seconds < 0 or self.max_reading_age_days <= 0:
+            raise ValueError('Capture time limits must be nonnegative (age must be positive)')
+        try:
+            timedelta(seconds=self.max_future_seconds)
+            timedelta(days=self.max_reading_age_days)
+            self.minimum_capture
+        except (ValueError, OverflowError, TypeError):
+            raise ValueError('Invalid Edge capture time configuration') from None
         limits = (self.max_temperature_offset, self.max_humidity_offset)
         if any(not math.isfinite(v) or v < 0 for v in limits):
             raise ValueError('Calibration offset limits must be finite and nonnegative')
@@ -60,6 +72,13 @@ class Config:
         except ValueError:
             return False
         return address.is_loopback or str(address) in self.admin_allowed_ips
+
+    @property
+    def minimum_capture(self) -> datetime:
+        value = datetime.fromisoformat(self.min_captured_at.replace('Z', '+00:00'))
+        if value.tzinfo is None:
+            raise ValueError('EDGE_MIN_CAPTURED_AT requires an explicit timezone')
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _canonical_ip(value):

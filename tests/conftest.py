@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 import secrets
+from itertools import count
+import uuid
 
 import pytest
 
@@ -42,8 +44,13 @@ class AuthenticatedEdgeClient:
     def __init__(self, client, admin_key, tokens=None):
         self.client, self.admin_key = client, admin_key
         self.tokens = tokens if tokens is not None else {}
+        self.boot_id = uuid.uuid4().hex
+        self.sequence = count()
 
     def open(self, path, method='GET', **kwargs):
+        if method == 'POST' and path == '/api/v1/edge/readings' and isinstance(kwargs.get('json'),dict):
+            kwargs['json'] = dict(kwargs['json'])
+            kwargs['json'].setdefault('sampleId', f'{self.boot_id}-{next(self.sequence)}')
         if 'headers' not in kwargs:
             if method == 'POST' and path == '/api/v1/edge/readings':
                 code = kwargs.get('json', {}).get('deviceCode')
