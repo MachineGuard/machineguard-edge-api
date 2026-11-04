@@ -241,3 +241,33 @@ def test_v2_migration_preserves_identity_credentials_pending_and_is_repeatable(c
             assert [r[:count] for r in connection.execute('SELECT * FROM '+table).fetchall()]==rows
     init_database(path)
     assert client.post('/api/v1/edge/buffer/sync').json['pending']==1
+
+
+def test_slow_worker_does_not_delay_availability_checks(tmp_path,clock):
+    import threading
+    from conftest import FakeCloud
+    cloud=FakeCloud();cloud.online=False
+    config=Config(database_path=str(tmp_path/'availability.db'),admin_key='x'*32,
+                  enable_availability_loop=False,enable_delivery_worker=False,
+                  delivery_poll_seconds=.01,availability_check_seconds=.02)
+    first=create_app(config,cloud,clock)
+    client=AuthenticatedEdgeClient(first.test_client(),config.admin_key)
+    client.post('/api/v1/edge/sensor-nodes',json={'deviceCode':'esp32-01','samplingIntervalSeconds':10})
+    post_reading(client)
+    clock.advance(seconds=13)
+    entered=threading.Event();release=threading.Event()
+    def send(readings):
+        entered.set();assert release.wait(3);return False
+    cloud.publish_batch=send
+    config.enable_delivery_worker=True;config.enable_availability_loop=True
+    from edge_api.infrastructure.models import OfflineNodeModel
+    # The persisted retry is due; the worker starts before the first availability tick.
+    LocalBufferEntryModel.update(next_attempt_at=None).execute()
+    second=create_app(config,cloud,clock)
+    try:
+        assert entered.wait(1)
+        deadline=time.monotonic()+.4
+        while time.monotonic()<deadline and not OfflineNodeModel.select().exists():time.sleep(.01)
+        assert OfflineNodeModel.select().exists()
+    finally:
+        release.set();second.config['services'].runtime.stop()

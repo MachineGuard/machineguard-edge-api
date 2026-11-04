@@ -2,7 +2,6 @@
 import atexit
 import logging
 import threading
-import time
 
 from ..domain.commands import SyncLocalBufferCommand
 from ..infrastructure.models import database
@@ -21,6 +20,7 @@ class EdgeRuntime:
         self.services = services
         self.stopped = threading.Event()
         self.thread = None
+        self.availability_thread = None
 
     def start(self):
         global _runtime
@@ -29,29 +29,40 @@ class EdgeRuntime:
         if not (config.enable_delivery_worker or config.enable_availability_loop):
             return
         self.services.sync.cancelled = self.stopped.is_set
-        self.thread = threading.Thread(target=self._loop,name='edge-delivery',daemon=True)
-        self.thread.start()
+        if config.enable_delivery_worker:
+            self.thread = threading.Thread(target=self._loop,name='edge-delivery',daemon=True)
+            self.thread.start()
+        if config.enable_availability_loop:
+            self.availability_thread = threading.Thread(target=self._availability_loop,name='node-availability',daemon=True)
+            self.availability_thread.start()
         atexit.register(self.stop)
 
     def stop(self):
         self.stopped.set()
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=12)
-            if self.thread.is_alive():
-                raise RuntimeError('Edge worker did not stop; database cannot be replaced')
+        for thread in (self.thread,self.availability_thread):
+            if thread and thread is not threading.current_thread():
+                thread.join(timeout=12)
+                if thread.is_alive():
+                    raise RuntimeError('Edge worker did not stop; database cannot be replaced')
 
     def _loop(self):
         config = self.services.config
-        next_availability = time.monotonic()+config.availability_check_seconds
         while not self.stopped.wait(config.delivery_poll_seconds):
             try:
                 if config.enable_delivery_worker:
                     self.services.sync.handle(SyncLocalBufferCommand(config.sync_batch_size),force=False)
-                if config.enable_availability_loop and time.monotonic() >= next_availability:
-                    self.services.detect_offline.handle()
-                    next_availability = time.monotonic()+config.availability_check_seconds
             except Exception:
                 logger.warning('Edge background cycle failed; durable pending readings retained')
+            finally:
+                if not database.is_closed():
+                    database.close()
+
+    def _availability_loop(self):
+        while not self.stopped.wait(self.services.config.availability_check_seconds):
+            try:
+                self.services.detect_offline.handle()
+            except Exception:
+                logger.warning('Edge availability cycle failed')
             finally:
                 if not database.is_closed():
                     database.close()
