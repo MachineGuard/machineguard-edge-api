@@ -94,7 +94,9 @@ def test_full_buffer_drops_oldest_pending_readings(make_client, cloud, clock):
     assert buffer["pendingCount"] == 2
     assert buffer["status"] == "FULL"
     assert buffer["oldestPendingAt"] == (t0 + timedelta(minutes=1)).isoformat() + "Z"
-    assert len(client.get("/api/v1/edge/readings/discarded").get_json()) == 1
+    assert len(client.get("/api/v1/edge/readings/discarded").get_json()) == 0
+    assert client.get("/api/v1/edge/health").json["delivery"]["lost"] == 1
+    assert any(r["status"] == "DROPPED_OVERFLOW" for r in client.get("/api/v1/edge/readings").json)
 
 
 def test_offset_update_only_affects_later_readings(client):

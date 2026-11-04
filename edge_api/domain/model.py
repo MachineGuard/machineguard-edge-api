@@ -9,6 +9,8 @@ class ReadingStatus(str, Enum):
     CALIBRATED = "CALIBRATED"
     DISCARDED = "DISCARDED"
     SYNCED = "SYNCED"
+    QUARANTINED = "QUARANTINED"
+    DROPPED_OVERFLOW = "DROPPED_OVERFLOW"
 
 
 class BufferStatus(str, Enum):
@@ -89,6 +91,7 @@ class SensorReading:
     id: Optional[int] = None
     sample_id: Optional[str] = None
     captured_at_supplied: bool = False
+    received_at: Optional[datetime] = None
 
     @classmethod
     def capture(cls, sensor_node_id: str, raw: RawReading) -> "SensorReading":

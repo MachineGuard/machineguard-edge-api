@@ -52,7 +52,7 @@ def live(tmp_path):
 
     gateway = provision()
     config = Config(database_path=str(tmp_path / "live-edge.db"), gateway_id=gateway["gateway"]["id"], admin_key=secrets.token_urlsafe(32),
-                    cloud_base_url=base, device_credential=gateway["credential"], enable_availability_loop=False)
+                    cloud_base_url=base, device_credential=gateway["credential"], enable_availability_loop=False,enable_delivery_worker=False)
     client = AuthenticatedEdgeClient(create_app(config).test_client(), config.admin_key)
     assert client.post("/api/v1/edge/sensor-nodes", json={"deviceCode": code}).status_code == 201
     assert client.put(f"/api/v1/edge/calibration/{code}/offset",

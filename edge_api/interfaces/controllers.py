@@ -150,6 +150,37 @@ def build_blueprint(c) -> Blueprint:
 
     @bp.get("/health")
     def health():
-        return jsonify({"status": "UP", "gatewayId": c.config.gateway_id})
+        return jsonify({"status": "UP", "gatewayId": c.config.gateway_id, 'delivery':_dates(c.sync.health())})
+
+    @bp.get('/quarantine')
+    def quarantine():
+        try:
+            offset = int(request.args.get('offset',0))
+            if offset < 0:
+                raise ValueError()
+        except ValueError:
+            raise ValidationError('offset debe ser un entero no negativo')
+        result = c.sync.quarantine(_limit(),offset)
+        for item in result['items']:
+            item['reading'] = res.calibrated_reading_resource(item['reading'])
+        return jsonify(_dates(result))
+
+    @bp.post('/quarantine/<int:quarantine_id>/reprocess')
+    def reprocess(quarantine_id):
+        c.sync.reprocess(quarantine_id,g.admin_actor)
+        return jsonify({'queued':True}),202
 
     return bp
+
+
+def _dates(value):
+    from datetime import datetime
+    if isinstance(value,datetime):
+        return res.iso(value)
+    if isinstance(value,dict):
+        return {key:_dates(item) for key,item in value.items()}
+    if isinstance(value,list):
+        return [_dates(item) for item in value]
+    if isinstance(value,float) and not __import__('math').isfinite(value):
+        return str(value)  # Legacy nonfinite evidence is represented explicitly, never invalid JSON.
+    return value

@@ -96,6 +96,7 @@ class SensorReadingRepository:
             raw=RawReading(m.raw_temperature, m.raw_humidity, m.captured_at),
             sample_id=m.sample_id,
             captured_at_supplied=m.captured_at_supplied,
+            received_at=m.received_at,
             status=ReadingStatus(m.status),
             calibrated_temperature=m.calibrated_temperature,
             calibrated_humidity=m.calibrated_humidity,
@@ -114,6 +115,7 @@ class SensorReadingRepository:
             status=r.status.value,
             sample_id=r.sample_id,
             captured_at_supplied=r.captured_at_supplied,
+            received_at=r.received_at,
         )
         if r.id is None:
             r.id = SensorReadingModel.create(**data).id
@@ -141,6 +143,12 @@ class SensorReadingRepository:
             .first()
         )
         return m.captured_at if m else None
+
+    def last_received_at(self, sensor_node_id):
+        row = (SensorReadingModel.select(SensorReadingModel.received_at)
+               .where((SensorReadingModel.sensor_node_id == sensor_node_id) & SensorReadingModel.received_at.is_null(False))
+               .order_by(SensorReadingModel.received_at.desc()).first())
+        return row.received_at if row else None
 
 
 class LocalBufferRepository:

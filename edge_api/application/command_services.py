@@ -20,7 +20,7 @@ from ..domain.model import (
     SamplingInterval,
     SensorReading,
 )
-from ..domain.services import BufferSynchronizationService, NodeAvailabilityService, ReadingCalibrationService
+from ..domain.services import NodeAvailabilityService, ReadingCalibrationService
 from ..infrastructure.cloud_client import CloudGateway
 from ..infrastructure.models import database
 from ..infrastructure.repositories import (
@@ -105,7 +105,8 @@ class CaptureSensorReadingCommandService:
         config: Config,
     ):
         self.profiles, self.readings, self.buffer = profiles, readings, buffer
-        self.offline_nodes, self.calibration, self.cloud, self.clock = offline_nodes, calibration, cloud, clock
+        self.offline_nodes, self.calibration, self.clock = offline_nodes, calibration, clock
+        self.delivery = cloud
         self.config = config
 
     def handle(self, command: CaptureSensorReadingCommand) -> SensorReading:
@@ -141,8 +142,15 @@ class CaptureSensorReadingCommandService:
             if reading.status == ReadingStatus.DISCARDED:
                 return reading
             self._restore_if_offline(command.device_code, now)
-            self._publish_or_buffer(reading, now)
-        return reading
+            reading.received_at = now
+            self.readings.save(reading)
+            was_empty = self.buffer.count_pending() == 0
+            self.buffer.enqueue(reading, now)
+            self.delivery.enforce_capacity()
+        if was_empty:
+            self.delivery.handle(SyncLocalBufferCommand(1), force=False, immediate=True)
+        from ..infrastructure.models import SensorReadingModel
+        return self.readings._to_domain(SensorReadingModel.get_by_id(reading.id))
 
     def _restore_if_offline(self, device_code: str, now: datetime) -> None:
         offline = self.offline_nodes.find_open_by_sensor_node_id(device_code)
@@ -150,60 +158,13 @@ class CaptureSensorReadingCommandService:
             offline.restore(now)
             self.offline_nodes.save(offline)
 
-    def _publish_or_buffer(self, reading: SensorReading, now: datetime) -> None:
-        # Si ya hay lecturas pendientes se encola para no romper el orden cronológico del historial.
-        if not self.buffer.count_pending() and self.cloud.publish_reading(reading):
-            reading.mark_as_synced()
-            self.readings.save(reading)
-            return
-        self.buffer.enqueue(reading, now)
-        self._enforce_capacity()
+    @property
+    def cloud(self):
+        return self.delivery.cloud
 
-    def _enforce_capacity(self) -> None:
-        overflow = self.buffer.current().overflow()
-        if overflow <= 0:
-            return
-        dropped = self.buffer.pending_readings(limit=overflow)
-        self.buffer.remove([r.id for r in dropped])
-        for r in dropped:
-            r.discard(r.calibration_profile_id)
-            self.readings.save(r)
-        logger.warning("Local Buffer lleno: se descartaron %d lecturas pendientes más antiguas", len(dropped))
-
-
-class SyncLocalBufferCommandService:
-    def __init__(
-        self,
-        readings: SensorReadingRepository,
-        buffer: LocalBufferRepository,
-        synchronization: BufferSynchronizationService,
-        cloud: CloudGateway,
-        clock: Clock,
-    ):
-        self.readings, self.buffer, self.synchronization = readings, buffer, synchronization
-        self.cloud, self.clock = cloud, clock
-
-    def handle(self, command: SyncLocalBufferCommand) -> dict:
-        if type(command.batch_size) is not int or not 1 <= command.batch_size <= 500:
-            raise ValidationError("batchSize debe ser un entero entre 1 y 500")
-        synced = 0
-        while True:
-            batch = self.synchronization.next_batch(self.buffer.pending_readings(limit=command.batch_size), command.batch_size)
-            if not batch:
-                break
-            if not self.cloud.publish_batch(batch):
-                break
-            with database.atomic():
-                for reading in batch:
-                    reading.mark_as_synced()
-                    self.readings.save(reading)
-                self.buffer.remove([r.id for r in batch])
-            synced += len(batch)
-        pending = self.buffer.count_pending()
-        if synced:
-            self.buffer.mark_synced_now(self.clock())
-        # BufferSynced: el buffer quedó vacío tras haber enviado lecturas.
-        return {"synced": synced, "pending": pending, "bufferSynced": synced > 0 and pending == 0}
+    @cloud.setter
+    def cloud(self, value):
+        self.delivery.cloud = value
 
 
 class DetectOfflineNodesCommandService:
@@ -224,7 +185,7 @@ class DetectOfflineNodesCommandService:
         for profile in self.profiles.list_all():
             if self.offline_nodes.find_open_by_sensor_node_id(profile.sensor_node_id):
                 continue
-            last_seen = self.readings.last_captured_at(profile.sensor_node_id) or profile.calibrated_at
+            last_seen = self.readings.last_received_at(profile.sensor_node_id) or profile.calibrated_at
             if self.availability.is_offline(last_seen, profile.sampling_interval, now):
                 node = self.availability.detect(profile.sensor_node_id, last_seen, profile.sampling_interval, now)
                 detected.append(self.offline_nodes.save(node))  # SensorNodeWentOffline

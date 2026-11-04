@@ -42,8 +42,11 @@ class BufferSynchronizationService:
 class NodeAvailabilityService:
     """Determina si un nodo sigue reportando dentro de su Sampling Interval."""
 
+    def __init__(self, grace_ratio=0.25):
+        self.grace_ratio = grace_ratio
+
     def is_offline(self, last_seen_at: datetime, interval: SamplingInterval, now: datetime) -> bool:
-        return interval.is_exceeded(last_seen_at, now)
+        return (now-last_seen_at).total_seconds() > interval.seconds * (1+self.grace_ratio)
 
     def detect(self, sensor_node_id: str, last_seen_at: datetime, interval: SamplingInterval, now: datetime) -> OfflineNode:
         return OfflineNode.detect(sensor_node_id, last_seen_at, interval, now)

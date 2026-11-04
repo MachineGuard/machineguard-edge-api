@@ -54,6 +54,25 @@ hora NTP. Edge devuelve la fila guardada y su estado actual, sin recalibrar ni
 reenviar; cambiar sus valores o fecha devuelve 409. Tras actualizar SQLite,
 las lecturas anteriores se conservan con `sampleId=null`; no se les inventa una identidad.
 
+### Entrega y recuperación
+
+La respuesta confirma `persistence=LOCAL_COMMITTED`: la muestra ya está guardada.
+`delivery=CONFIRMED` indica además un recibo válido de Core; `PENDING` indica
+envío pendiente. Edge reintenta automáticamente con espera creciente, también
+tras reiniciar. Conserva el mismo archivo SQLite. Para detenerlo desde Python,
+usa `app.config['services'].runtime.stop()`; `run.py` lo hace al salir.
+
+Un conflicto o valor rechazado queda en cuarentena; un problema de configuración
+pausa solo el nodo afectado. Consulta `/health` y `/quarantine?limit=50&offset=0`
+con la clave administrativa. Tras corregir la causa en Core, puedes solicitar
+`POST /quarantine/{id}/reprocess`: conserva la muestra, calibración e historial.
+Los nodos pausados se reintentan solos. `/buffer/sync` solicita un ciclo acotado;
+si ya hay otro envío, devuelve `busy=true`.
+
+Si se supera la capacidad, las pendientes más antiguas que no estén en envío
+quedan como `DROPPED_OVERFLOW`, con un registro de pérdida. La evidencia sigue
+en SQLite: la capacidad limita pendientes, no el tamaño total de la base.
+
 ## Ejecución
 
 ```bash
@@ -112,8 +131,8 @@ Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en
 - Solo se publican lecturas en estado `CALIBRATED`; sin conectividad se encolan en el Local Buffer.
 - Mientras haya lecturas pendientes, las nuevas también se encolan para no romper el orden cronológico.
 - La sincronización envía lotes en orden cronológico ascendente; una lectura `SYNCED` no se reenvía.
-- Si el buffer se llena, se descartan las pendientes más antiguas.
-- Un nodo que supera su Sampling Interval se registra como `OfflineNode` (`SensorNodeWentOffline`) y se restaura al recibir una nueva lectura.
+- El desborde conserva la lectura y un registro de pérdida separado de la implausibilidad.
+- OFFLINE usa la recepción válida y un margen configurable del 25 % del intervalo; capturas futuras, reintentos e implausibles no alargan esa ventana.
 
 ## Contrato con la API central
 
@@ -126,9 +145,9 @@ La credencial se emite en Core mediante un ADMIN activo, ligada a su organizaci�
 
 La confirmación requiere **2xx y un recibo válido**: `readingsAccepted` coincide con las lecturas enviadas y `measurementsCreated + measurementsReused` equivale a dos mediciones por lectura. Una página HTML, redirección, respuesta vacía o recibo incompleto no elimina pendientes. No se siguen redirecciones ni se registran secretos en logs.
 
-Core resuelve `deviceCode` a los UUID de sus sensores autorizados y registra temperatura/humedad en una transacción. Un reintento idéntico responde con los registros existentes; datos distintos en el mismo instante son un conflicto 409. Así, si Core guardó y la respuesta se perdió, Edge puede confirmar después sin duplicar datos. Los errores de autenticación, autorización o conflicto conservan las lecturas pendientes para corregir su causa.
+Core resuelve `deviceCode` a los UUID de sus sensores autorizados y registra temperatura/humedad en una transacción. Un reintento idéntico responde con los registros existentes; datos distintos en el mismo instante son un conflicto 409. Así, si Core guardó y la respuesta se perdió, Edge puede confirmar después sin duplicar datos. Edge interpreta el campo `code`: errores de muestra van a cuarentena; errores de configuración pausan el nodo. Red, 401/403, 5xx y respuestas sin código conocido conservan pendientes.
 
-Se preservan microsegundos y se normaliza UTC. Los lotes se envían en bloques de hasta 500 lecturas, sin alterar el tamaño de selección del buffer. Si falla un bloque posterior, Edge conserva todo el lote seleccionado y reintenta; Core confirma idempotentemente los bloques ya recibidos. La sincronización se solicita mediante `POST /api/v1/edge/buffer/sync`; no se introduce un scheduler nuevo en esta entrega.
+Se preservan microsegundos y se normaliza UTC. Los lotes tienen hasta 500 lecturas; ante rechazos identificables o 5xx repetidos, Edge los divide con un límite de peticiones por ciclo. Core conserva la atomicidad de cada petición. El worker y el sync manual comparten exclusión; un recibo inválido nunca libera pendientes.
 
 Configuración de ejemplo: `.env.example` (el proceso recibe las variables del entorno; no carga automáticamente el archivo). Las pruebas del transporte están en `tests/test_cloud_client.py`; ejecutar `python -m pytest` mantiene además la suite unitaria y los escenarios BDD integrados.
 

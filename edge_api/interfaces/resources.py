@@ -78,6 +78,10 @@ def calibrated_reading_resource(r: SensorReading) -> dict:
         "calibratedHumidity": r.calibrated_humidity,
         "capturedAt": iso(r.raw.captured_at),
         "status": r.status.value,
+        "receivedAt": iso(r.received_at),
+        "persistence": "LOCAL_COMMITTED",
+        "delivery": ("CONFIRMED" if r.is_synced() else "QUARANTINED" if r.status.value == 'QUARANTINED'
+                     else "NOT_QUEUED" if r.status.value in ('DISCARDED','DROPPED_OVERFLOW') else "PENDING"),
     }
 
 

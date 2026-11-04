@@ -19,7 +19,7 @@ def boundary(tmp_path, monkeypatch, cloud, clock):
     key = secrets.token_urlsafe(32)
     monkeypatch.setenv('EDGE_ADMIN_KEY', key)
     monkeypatch.setenv('EDGE_ADMIN_ID', 'bench-operator')
-    config = Config(database_path=str(tmp_path / 'boundary.db'), enable_availability_loop=False)
+    config = Config(database_path=str(tmp_path / 'boundary.db'), enable_availability_loop=False,enable_delivery_worker=False)
     app = create_app(config, cloud=cloud, clock=clock)
     client = app.test_client()
     admin = {'X-Edge-Admin-Key': key}
@@ -147,7 +147,7 @@ def test_ac04_calibrated_values_outside_physical_range_are_not_published(boundar
 def test_implausible_reading_does_not_restore_offline(boundary, clock):
     _, c, admin, tokens = boundary
     send(c, tokens)
-    clock.advance(seconds=11)
+    clock.advance(seconds=13)
     assert len(c.get(BASE + '/sensor-nodes/offline', headers=admin).json) == 2
     assert send(c, tokens, temperature=900).status_code == 202
     codes = [n['deviceCode'] for n in c.get(BASE + '/sensor-nodes/offline', headers=admin).json]
@@ -157,7 +157,7 @@ def test_implausible_reading_does_not_restore_offline(boundary, clock):
 def test_implausible_reading_does_not_hide_silence_before_offline_check(boundary, clock):
     _, c, admin, tokens = boundary
     send(c, tokens)
-    clock.advance(seconds=11)
+    clock.advance(seconds=13)
     assert send(c, tokens, temperature=900).status_code == 202
     codes = [n['deviceCode'] for n in c.get(BASE + '/sensor-nodes/offline', headers=admin).json]
     assert 'node-a' in codes
@@ -196,7 +196,7 @@ def test_node_credentials_are_hashed_rotatable_and_survive_restart(boundary, clo
 def test_body_limit_is_enforced(tmp_path, monkeypatch, cloud, clock):
     monkeypatch.setenv('EDGE_ADMIN_KEY', secrets.token_urlsafe(32))
     monkeypatch.setenv('EDGE_MAX_CONTENT_BYTES', '128')
-    c = create_app(Config(database_path=str(tmp_path/'limit.db'), enable_availability_loop=False), cloud, clock).test_client()
+    c = create_app(Config(database_path=str(tmp_path/'limit.db'), enable_availability_loop=False,enable_delivery_worker=False), cloud, clock).test_client()
     assert c.post(BASE + '/sensor-nodes', headers={'X-Edge-Admin-Key': os.environ['EDGE_ADMIN_KEY']},
                   json={'deviceCode': 'x', 'padding': 'a'*500}).status_code == 413
 
@@ -204,7 +204,7 @@ def test_body_limit_is_enforced(tmp_path, monkeypatch, cloud, clock):
 def test_startup_requires_admin_key_and_defaults_to_loopback(tmp_path, monkeypatch, cloud, clock):
     monkeypatch.delenv('EDGE_ADMIN_KEY', raising=False)
     with pytest.raises(ValueError, match='EDGE_ADMIN_KEY'):
-        create_app(Config(database_path=str(tmp_path/'no-key.db'), enable_availability_loop=False), cloud, clock)
+        create_app(Config(database_path=str(tmp_path/'no-key.db'), enable_availability_loop=False,enable_delivery_worker=False), cloud, clock)
     monkeypatch.setenv('EDGE_ADMIN_KEY', secrets.token_urlsafe(32))
     assert Config().bind_host == '127.0.0.1'
 
@@ -247,11 +247,11 @@ def test_migration_preserves_legacy_evidence_and_needs_explicit_node_provisionin
     before = {t._meta.table_name: list(database.execute_sql('SELECT * FROM '+t._meta.table_name)) for t in tables}
     database.close()
     key = secrets.token_urlsafe(32); monkeypatch.setenv('EDGE_ADMIN_KEY', key)
-    config = Config(database_path=path, enable_availability_loop=False)
+    config = Config(database_path=path, enable_availability_loop=False,enable_delivery_worker=False)
     c = create_app(config, cloud, clock).test_client()
     after = {t._meta.table_name: list(database.execute_sql('SELECT * FROM '+t._meta.table_name)) for t in tables}
     assert before == after
-    assert database.pragma('user_version') == 2
+    assert database.pragma('user_version') == 3
     assert c.post(BASE+'/readings', json={'deviceCode':'legacy','temperature':5,'humidity':50}).status_code == 401
     admin = {'X-Edge-Admin-Key':key}
     issued = c.post(BASE+'/sensor-nodes/legacy/credentials', headers=admin)

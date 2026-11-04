@@ -32,6 +32,16 @@ class Config:
         float(os.getenv("EDGE_HUMIDITY_MIN", "0")), float(os.getenv("EDGE_HUMIDITY_MAX", "100"))))
     availability_check_seconds: int = field(default_factory=lambda: int(os.getenv("EDGE_AVAILABILITY_CHECK_SECONDS", "30")))
     enable_availability_loop: bool = True
+    enable_delivery_worker: bool = True
+    delivery_poll_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_POLL_SECONDS', '1')))
+    delivery_backoff_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_BACKOFF_SECONDS', '2')))
+    delivery_max_backoff_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_MAX_BACKOFF_SECONDS', '60')))
+    delivery_max_requests: int = field(default_factory=lambda: int(os.getenv('EDGE_DELIVERY_MAX_REQUESTS', '16')))
+    delivery_max_depth: int = field(default_factory=lambda: int(os.getenv('EDGE_DELIVERY_MAX_DEPTH', '9')))
+    delivery_http_timeout_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_HTTP_TIMEOUT_SECONDS', '5')))
+    delivery_lease_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_LEASE_SECONDS', '30')))
+    node_pause_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_NODE_PAUSE_SECONDS', '60')))
+    offline_grace_ratio: float = field(default_factory=lambda: float(os.getenv('EDGE_OFFLINE_GRACE_RATIO', '0.25')))
 
     def validate(self) -> None:
         if self.admin_key == 'replace-with-at-least-32-random-bytes':
@@ -53,6 +63,17 @@ class Config:
             raise ValueError('Invalid sampling interval or EDGE_SYNC_BATCH_SIZE (1..500)')
         if self.max_future_seconds < 0 or self.max_reading_age_days <= 0:
             raise ValueError('Capture time limits must be nonnegative (age must be positive)')
+        if self.max_future_seconds > 86400 or self.max_reading_age_days > 36600:
+            raise ValueError('Edge capture time limits exceed supported age/time bounds')
+        positive = (self.delivery_poll_seconds,self.delivery_backoff_seconds,self.delivery_max_backoff_seconds,
+                    self.node_pause_seconds,self.delivery_http_timeout_seconds,self.delivery_lease_seconds)
+        if (any(not math.isfinite(v) or v <= 0 for v in positive)
+                or self.delivery_max_backoff_seconds < self.delivery_backoff_seconds
+                or not 1 <= self.delivery_max_requests <= 64 or not 1 <= self.delivery_max_depth <= 9
+                or not math.isfinite(self.offline_grace_ratio) or not 0 <= self.offline_grace_ratio <= 2):
+            raise ValueError('Invalid delivery or offline tolerance configuration')
+        if not self.delivery_http_timeout_seconds <= 5 or not 2*self.delivery_http_timeout_seconds+1 <= self.delivery_lease_seconds <= 300:
+            raise ValueError('Delivery lease must exceed HTTP timeouts and remain at most 300 seconds')
         try:
             timedelta(seconds=self.max_future_seconds)
             timedelta(days=self.max_reading_age_days)

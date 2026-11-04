@@ -21,7 +21,7 @@ def test_r2_startup_rejects_empty_and_example_admin_keys(tmp_path, monkeypatch, 
     path = tmp_path / 'must-not-open.db'
     try:
         with pytest.raises(ValueError, match='EDGE_ADMIN_KEY'):
-            create_app(Config(database_path=str(path), enable_availability_loop=False))
+            create_app(Config(database_path=str(path), enable_availability_loop=False,enable_delivery_worker=False))
         assert not path.exists()
     finally:
         if not database.is_closed():
@@ -92,7 +92,7 @@ def test_r3_invalid_allowlist_fails_closed(tmp_path, monkeypatch, allowed):
     monkeypatch.setenv('EDGE_ADMIN_ALLOWED_IPS', allowed)
     try:
         with pytest.raises(ValueError, match='EDGE_ADMIN_ALLOWED_IPS'):
-            create_app(Config(database_path=str(tmp_path / 'invalid-source.db'), enable_availability_loop=False))
+            create_app(Config(database_path=str(tmp_path / 'invalid-source.db'), enable_availability_loop=False,enable_delivery_worker=False))
     finally:
         if not database.is_closed():
             database.close()

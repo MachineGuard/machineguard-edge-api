@@ -18,7 +18,7 @@ BASE = '/api/v1/edge'
 @pytest.fixture
 def sample(tmp_path, cloud, clock):
     key = secrets.token_urlsafe(32)
-    config = Config(database_path=str(tmp_path/'samples.db'), admin_key=key, enable_availability_loop=False)
+    config = Config(database_path=str(tmp_path/'samples.db'), admin_key=key, enable_availability_loop=False,enable_delivery_worker=False)
     app = create_app(config, cloud, clock)
     c = app.test_client(); admin = {'X-Edge-Admin-Key': key}; tokens = {}
     for code in ['node-a', 'node-b']:
@@ -52,7 +52,7 @@ def test_sample_retry_without_clock_keeps_original_row_capture_and_calibration(s
 def test_sample_retry_persists_across_restart_and_does_not_restore_offline(sample, cloud, clock):
     cloud.online = False
     first = send(sample)
-    clock.advance(seconds=61)
+    clock.advance(seconds=76)
     sample.c.get(BASE+'/sensor-nodes/offline', headers=sample.admin)
     sample.c = create_app(sample.config, cloud, clock).test_client()
     again = send(sample)
@@ -114,7 +114,7 @@ def test_time_policy_is_configurable(sample, monkeypatch, cloud, clock):
     monkeypatch.setenv('EDGE_MAX_READING_AGE_DAYS','1')
     monkeypatch.setenv('EDGE_MIN_CAPTURED_AT','2026-09-01T00:00:00Z')
     sample.c = create_app(Config(database_path=sample.config.database_path, admin_key=sample.config.admin_key,
-                                enable_availability_loop=False),cloud,clock).test_client()
+                                enable_availability_loop=False,enable_delivery_worker=False),cloud,clock).test_client()
     assert send(sample,capturedAt=(clock.now+timedelta(seconds=6)).isoformat()+'Z').status_code == 400
     assert send(sample,capturedAt=(clock.now-timedelta(days=2)).isoformat()+'Z').status_code == 400
     assert send(sample,capturedAt=(clock.now+timedelta(seconds=5)).isoformat()+'Z').status_code == 201
@@ -123,7 +123,7 @@ def test_time_policy_is_configurable(sample, monkeypatch, cloud, clock):
 def test_minimum_capture_is_configurable_independently_of_age(sample, monkeypatch, cloud, clock):
     monkeypatch.setenv('EDGE_MIN_CAPTURED_AT','2026-10-01T11:59:59Z')
     sample.c = create_app(Config(database_path=sample.config.database_path, admin_key=sample.config.admin_key,
-                                enable_availability_loop=False),cloud,clock).test_client()
+                                enable_availability_loop=False,enable_delivery_worker=False),cloud,clock).test_client()
     assert send(sample,capturedAt='2026-10-01T11:59:58Z').status_code == 400
     assert send(sample,capturedAt='2026-10-01T11:59:59Z').status_code == 201
 
@@ -178,7 +178,7 @@ def legacy_v1(tmp_path, clock):
     database.pragma('user_version',1)
     columns = {t:[c.name for c in database.get_columns(t)] for t in database.get_tables()}
     before = {t:list(database.execute_sql('SELECT '+','.join(cs)+' FROM '+t+' ORDER BY 1')) for t,cs in columns.items()}
-    config = Config(database_path=path,admin_key=secrets.token_urlsafe(32),enable_availability_loop=False)
+    config = Config(database_path=path,admin_key=secrets.token_urlsafe(32),enable_availability_loop=False,enable_delivery_worker=False)
     yield SimpleNamespace(path=path,config=config,token=token,columns=columns,before=before)
     if not database.is_closed(): database.close()
 
@@ -188,7 +188,7 @@ def test_v1_migration_preserves_every_row_and_credentials_then_restarts(legacy_v
     c=create_app(old.config,cloud,clock).test_client()
     after={t:list(database.execute_sql('SELECT '+','.join(cs)+' FROM '+t+' ORDER BY 1')) for t,cs in old.columns.items()}
     assert after==old.before
-    assert database.pragma('user_version')==2
+    assert database.pragma('user_version')==3
     assert list(database.execute_sql('SELECT sample_id FROM sensor_readings'))==[(None,)]*3
     c=create_app(old.config,cloud,clock).test_client()
     r=c.post(BASE+'/readings',headers={'X-Node-Credential':old.token},
@@ -223,7 +223,7 @@ def test_unknown_future_schema_is_not_modified(tmp_path, cloud, clock):
         c.execute('CREATE TABLE keep_this(value TEXT)'); c.execute("INSERT INTO keep_this VALUES ('evidence')")
         c.execute('PRAGMA user_version=99')
     with pytest.raises(ValueError,match='Unsupported'):
-        create_app(Config(database_path=path,admin_key=secrets.token_urlsafe(32),enable_availability_loop=False),cloud,clock)
+        create_app(Config(database_path=path,admin_key=secrets.token_urlsafe(32),enable_availability_loop=False,enable_delivery_worker=False),cloud,clock)
     if not database.is_closed(): database.close()
     with sqlite3.connect(path) as c:
         assert c.execute('PRAGMA user_version').fetchone()[0]==99
@@ -236,4 +236,4 @@ def test_invalid_time_configuration_fails_at_startup(tmp_path, monkeypatch, vari
     monkeypatch.setenv(variable,value)
     with pytest.raises(ValueError):
         create_app(Config(database_path=str(tmp_path/'invalid-config.db'),admin_key=secrets.token_urlsafe(32),
-                          enable_availability_loop=False))
+                          enable_availability_loop=False,enable_delivery_worker=False))

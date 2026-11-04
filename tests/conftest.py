@@ -87,6 +87,7 @@ def make_client(tmp_path, cloud, clock):
             database_path=str(tmp_path / "edge-test.db"),
             gateway_id="gw-test",
             enable_availability_loop=False,
+            enable_delivery_worker=False,
             admin_key=admin_key,
             **overrides,
         )

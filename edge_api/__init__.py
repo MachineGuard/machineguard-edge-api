@@ -1,5 +1,4 @@
 import logging
-import threading
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -13,9 +12,10 @@ from .application.command_services import (
     CaptureSensorReadingCommandService,
     DetectOfflineNodesCommandService,
     RegisterSensorNodeCommandService,
-    SyncLocalBufferCommandService,
 )
 from .application.errors import ApplicationError
+from .application.delivery import DeliveryCoordinator
+from .application.runtime import EdgeRuntime, stop_previous_runtime
 from .application.node_credentials import NodeCredentialService
 from .application.query_services import (
     GetCalibrationProfileQueryService,
@@ -24,7 +24,7 @@ from .application.query_services import (
     GetSensorReadingsQueryService,
 )
 from .config import Config
-from .domain.services import BufferSynchronizationService, NodeAvailabilityService, ReadingCalibrationService
+from .domain.services import NodeAvailabilityService, ReadingCalibrationService
 from .infrastructure.cloud_client import CloudGateway, HttpCloudClient
 from .infrastructure.models import database, init_database
 from .infrastructure.repositories import (
@@ -65,14 +65,16 @@ def create_app(
 ) -> Flask:
     config = config or Config()
     config.validate()
+    stop_previous_runtime()
     init_database(config.database_path)
-    cloud = cloud or HttpCloudClient(config.cloud_base_url, config.device_credential)
+    cloud = cloud or HttpCloudClient(config.cloud_base_url, config.device_credential,config.delivery_http_timeout_seconds)
 
     profiles = CalibrationProfileRepository()
     readings = SensorReadingRepository()
     buffer = LocalBufferRepository(config.gateway_id, config.buffer_capacity)
     offline_nodes = OfflineNodeRepository()
-    availability = NodeAvailabilityService()
+    availability = NodeAvailabilityService(config.offline_grace_ratio)
+    delivery = DeliveryCoordinator(readings, buffer, cloud, clock, config)
     changes = CalibrationChangeRepository()
     credentials = NodeCredentialService(profiles, NodeCredentialRepository(), clock)
 
@@ -83,9 +85,9 @@ def create_app(
         credentials=credentials,
         calibration_changes=changes,
         capture=CaptureSensorReadingCommandService(
-            profiles, readings, buffer, offline_nodes, ReadingCalibrationService(), cloud, clock, config
+            profiles, readings, buffer, offline_nodes, ReadingCalibrationService(), delivery, clock, config
         ),
-        sync=SyncLocalBufferCommandService(readings, buffer, BufferSynchronizationService(), cloud, clock),
+        sync=delivery,
         detect_offline=DetectOfflineNodesCommandService(profiles, readings, offline_nodes, availability, clock),
         buffer_query=GetLocalBufferQueryService(buffer),
         calibration_query=GetCalibrationProfileQueryService(profiles),
@@ -103,18 +105,6 @@ def create_app(
     def handle_application_error(error: ApplicationError):
         return jsonify({"error": error.message}), error.status_code
 
-    if config.enable_availability_loop:
-        _start_availability_loop(services, config.availability_check_seconds)
+    services.runtime = EdgeRuntime(services)
+    services.runtime.start()
     return app
-
-
-def _start_availability_loop(services, interval_seconds: int) -> None:
-    def loop():
-        while True:
-            threading.Event().wait(interval_seconds)
-            try:
-                services.detect_offline.handle()
-            except Exception:  # el monitoreo de disponibilidad nunca debe tumbar el gateway
-                logger.exception("Falló la revisión de disponibilidad de nodos")
-
-    threading.Thread(target=loop, name="node-availability", daemon=True).start()

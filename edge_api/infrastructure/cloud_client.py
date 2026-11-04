@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Protocol
 
@@ -7,6 +8,18 @@ import requests
 from ..domain.model import SensorReading
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DeliveryResult:
+    accepted: bool = False
+    code: str = 'UNCONFIRMED'
+    http_status: int | None = None
+
+
+SAMPLE_CODES = frozenset({'READING_INVALID', 'READING_TIME_INVALID', 'READING_CONFLICT', 'LOCAL_READING_INVALID'})
+NODE_CODES = frozenset({'NODE_NOT_AUTHORIZED', 'NODE_INACTIVE', 'THRESHOLD_NOT_CONFIGURED'})
+KNOWN_CODES = SAMPLE_CODES | NODE_CODES | {'GATEWAY_CREDENTIAL_REJECTED', 'GATEWAY_INGEST_FORBIDDEN', 'INGESTION_REJECTED'}
 
 
 class CloudGateway(Protocol):
@@ -36,23 +49,37 @@ class HttpCloudClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.headers = {"X-Device-Credential": device_credential, "Content-Type": "application/json"}
+        self.last_result = DeliveryResult()
 
     def _post(self, path: str, body, expected_readings: int = 1) -> bool:
         if not self.base_url or not self.headers["X-Device-Credential"]:
+            self.last_result = DeliveryResult(code='UNCONFIGURED')
             return False
         try:
             response = requests.post(f"{self.base_url}{path}", json=body, headers=self.headers,
                                      timeout=self.timeout, allow_redirects=False)
             if not 200 <= response.status_code < 300:
+                try:
+                    error = response.json()
+                    code = error.get('code') if isinstance(error, dict) else None
+                except ValueError:
+                    code = None
+                # Unknown/old Core envelopes stay retryable; never compare descriptions.
+                self.last_result = DeliveryResult(code=code if code in KNOWN_CODES else 'UNKNOWN_REJECTION', http_status=response.status_code)
                 logger.warning("Core rejected ingestion with HTTP %s; readings remain pending", response.status_code)
                 return False
             receipt = response.json()
+            self.last_result = DeliveryResult(code='INVALID_RECEIPT', http_status=response.status_code)
             if not isinstance(receipt, dict):
                 return False
             counts = [receipt.get(key) for key in ("readingsAccepted", "measurementsCreated", "measurementsReused")]
-            return (all(type(value) is int and value >= 0 for value in counts)
+            accepted = (all(type(value) is int and value >= 0 for value in counts)
                     and counts[0] == expected_readings and counts[1] + counts[2] == 2 * expected_readings)
+            if accepted:
+                self.last_result = DeliveryResult(True, 'CONFIRMED', response.status_code)
+            return accepted
         except (requests.RequestException, ValueError):
+            self.last_result = DeliveryResult(code='NETWORK_OR_INVALID_RESPONSE')
             # Do not log request headers or exceptions that might contain credentials.
             logger.warning("Core ingestion could not be confirmed; readings remain pending")
             return False
