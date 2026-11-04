@@ -48,7 +48,10 @@ class StrictJSONProvider(DefaultJSONProvider):
             result = float(number)
             return result if math.isfinite(result) else invalid(number)
         kwargs.update(parse_constant=invalid, parse_float=finite_float)
-        return super().loads(value, **kwargs)
+        try:
+            return super().loads(value, **kwargs)
+        except RecursionError as error:
+            raise ValueError('JSON nesting is too deep') from error
 
 
 def utc_now() -> datetime:
