@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import secrets
 
 import pytest
 
@@ -36,6 +37,30 @@ class FakeClock:
         self.now += timedelta(**kwargs)
 
 
+class AuthenticatedEdgeClient:
+    """Legacy behavior scenarios use the same real authorization boundary as nodes."""
+    def __init__(self, client, admin_key, tokens=None):
+        self.client, self.admin_key = client, admin_key
+        self.tokens = tokens if tokens is not None else {}
+
+    def open(self, path, method='GET', **kwargs):
+        if 'headers' not in kwargs:
+            if method == 'POST' and path == '/api/v1/edge/readings':
+                code = kwargs.get('json', {}).get('deviceCode')
+                token = self.tokens.get(code, next(iter(self.tokens.values()), 'not-issued'))
+                kwargs['headers'] = {'X-Node-Credential': token}
+            else:
+                kwargs['headers'] = {'X-Edge-Admin-Key': self.admin_key}
+        response = self.client.open(path, method=method, **kwargs)
+        if method == 'POST' and path == '/api/v1/edge/sensor-nodes' and response.status_code == 201:
+            self.tokens[response.json['deviceCode']] = response.json['nodeCredential']
+        return response
+
+    def get(self, path, **kwargs): return self.open(path, 'GET', **kwargs)
+    def post(self, path, **kwargs): return self.open(path, 'POST', **kwargs)
+    def put(self, path, **kwargs): return self.open(path, 'PUT', **kwargs)
+
+
 @pytest.fixture
 def cloud():
     return FakeCloud()
@@ -48,14 +73,17 @@ def clock():
 
 @pytest.fixture
 def make_client(tmp_path, cloud, clock):
+    admin_key = secrets.token_urlsafe(32)
+    tokens = {}
     def _make(**overrides):
         config = Config(
             database_path=str(tmp_path / "edge-test.db"),
             gateway_id="gw-test",
             enable_availability_loop=False,
+            admin_key=admin_key,
             **overrides,
         )
-        return create_app(config, cloud=cloud, clock=clock).test_client()
+        return AuthenticatedEdgeClient(create_app(config, cloud=cloud, clock=clock).test_client(), admin_key, tokens)
 
     return _make
 

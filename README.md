@@ -5,13 +5,41 @@ Bounded Context **Edge Processing** de MachineGuard. Se ejecuta en el Edge Gatew
 - Flask + Peewee ORM + SQLite
 - Arquitectura DDD por capas: `domain`, `application`, `infrastructure`, `interfaces`
 
+## Acceso y configuración
+
+Define las variables en el entorno antes de iniciar; `.env.example` sirve de
+guía y no se carga automáticamente. `EDGE_ADMIN_KEY` debe ser una clave privada
+aleatoria de al menos 32 bytes, distinta de la credencial de Core.
+`EDGE_ADMIN_ID` identifica al administrador en el registro de calibración.
+
+Edge escucha en `127.0.0.1` por defecto. Para recibir nodos por la red del banco,
+configura `EDGE_BIND_HOST` con la IP privada del gateway. La administración
+solo acepta conexiones locales; para acceder por otra IP de la laptop, añádela
+a `EDGE_ADMIN_ALLOWED_IPS` (IP completas separadas por comas, sin rangos).
+En una red compartida se requiere HTTPS con certificado validado.
+
+Usa `X-Edge-Admin-Key` para registrar nodos, calibrar, consultar y sincronizar.
+Al registrar un nodo, la respuesta entrega `nodeCredential` una sola vez:
+guárdala en ese nodo y envíala en `X-Node-Credential` al publicar `/readings`
+con su `deviceCode`. No combines ambas claves ni entregues la de Core al nodo.
+Los nodos ya registrados necesitan emitir su credencial; la base conserva sus
+datos. La ruta de emisión también permite cambiar la clave e invalida la anterior.
+
+Sin credencial válida se responde 401; un origen o deviceCode no autorizado,
+403. JSON inválido devuelve 400 y un cuerpo mayor que `EDGE_MAX_CONTENT_BYTES`
+(65536 por defecto), 413. `batchSize` debe ser un entero de 1 a 500. Por defecto,
+los offsets admiten ±10 °C y ±20 % HR; una lectura calibrada fuera de −40..80 °C
+o 0..100 % HR se descarta (202) y no se envía a Core. Los límites se configuran
+con las variables indicadas en `.env.example`.
+
 ## Ejecución
 
 ```bash
 python -m venv .venv
 .venv\Scripts\activate        # Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
-python run.py                 # http://localhost:5000
+# Set private environment variables first (see .env.example).
+python run.py                 # http://127.0.0.1:5000
 ```
 
 Pruebas:
@@ -44,10 +72,12 @@ Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en
 | GET | `/readings/discarded` | Lecturas descartadas por implausibilidad |
 | GET | `/calibration/{deviceCode}` | Calibration Profile del nodo |
 | PUT | `/calibration/{deviceCode}/offset` | Actualiza el Calibration Offset (solo afecta lecturas posteriores) |
+| GET | `/calibration/{deviceCode}/changes` | Consulta quién cambió los offsets, cuándo y sus valores |
 | GET | `/calibration/{deviceCode}/plausibility-range` | Rango de plausibilidad configurado |
 | GET | `/buffer` | Estado del Local Buffer (pendientes, última sincronización) |
 | POST | `/buffer/sync` | Fuerza la sincronización del buffer |
 | POST | `/sensor-nodes` | Registra un Sensor Node en el gateway |
+| POST | `/sensor-nodes/{deviceCode}/credentials` | Emite o cambia la credencial de un nodo registrado |
 | GET | `/sensor-nodes` | Estado de conectividad de los nodos |
 | GET | `/sensor-nodes/offline` | Nodos detectados como Offline |
 | GET | `/health` | Estado del servicio |
@@ -56,6 +86,7 @@ Los criterios de aceptación de TS02, TS03 y US03 están escritos en Gherkin, en
 
 - La lectura conserva la marca temporal de captura del nodo, no la del envío.
 - Una lectura fuera del rango físico del sensor se descarta antes de calibrarse y nunca se publica.
+- La lectura calibrada también debe respetar el rango físico; un descarte no restaura ONLINE.
 - Solo se publican lecturas en estado `CALIBRATED`; sin conectividad se encolan en el Local Buffer.
 - Mientras haya lecturas pendientes, las nuevas también se encolan para no romper el orden cronológico.
 - La sincronización envía lotes en orden cronológico ascendente; una lectura `SYNCED` no se reenvía.

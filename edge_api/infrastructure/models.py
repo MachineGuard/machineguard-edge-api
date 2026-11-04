@@ -84,9 +84,41 @@ class SyncStateModel(BaseModel):
 ALL_MODELS = [CalibrationProfileModel, SensorReadingModel, LocalBufferEntryModel, OfflineNodeModel, SyncStateModel]
 
 
+class NodeCredentialModel(BaseModel):
+    profile = ForeignKeyField(CalibrationProfileModel, primary_key=True, on_delete='RESTRICT')
+    credential_hash = CharField(unique=True, max_length=64)
+    issued_at = DateTimeField()
+
+    class Meta:
+        table_name = 'node_credentials'
+
+
+class CalibrationChangeModel(BaseModel):
+    id = AutoField()
+    profile = ForeignKeyField(CalibrationProfileModel, on_delete='RESTRICT')
+    actor = CharField(max_length=64)
+    changed_at = DateTimeField()
+    old_temperature_offset = FloatField()
+    old_humidity_offset = FloatField()
+    new_temperature_offset = FloatField()
+    new_humidity_offset = FloatField()
+
+    class Meta:
+        table_name = 'calibration_changes'
+
+
 def init_database(path: str) -> None:
     if not database.is_closed():
         database.close()
     database.init(path)
     database.connect(reuse_if_open=True)
-    database.create_tables(ALL_MODELS)
+    # Version 0 is the published schema. This additive migration preserves all
+    # readings/buffer entries and leaves legacy nodes uncredentialed until provisioned.
+    with database.atomic('IMMEDIATE'):
+        version = database.pragma('user_version')
+        if version > 1:
+            raise ValueError('Unsupported Edge database schema version')
+        database.create_tables(ALL_MODELS)
+        if version == 0:
+            database.create_tables([NodeCredentialModel, CalibrationChangeModel])
+            database.pragma('user_version', 1)

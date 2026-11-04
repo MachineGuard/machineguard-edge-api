@@ -38,4 +38,4 @@ Característica: TS02 - Calibrar y filtrar lecturas en Edge
 
   Escenario: Una lectura de un nodo no registrado es rechazada
     Cuando el nodo "esp32-99" envía una lectura de 5.0 °C y 60 % de humedad
-    Entonces la respuesta tiene el código 404
+    Entonces la respuesta tiene el código 403

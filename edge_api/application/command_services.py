@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from typing import Callable
 
@@ -34,16 +35,18 @@ Clock = Callable[[], datetime]
 
 
 class RegisterSensorNodeCommandService:
-    def __init__(self, profiles: CalibrationProfileRepository, config: Config, clock: Clock):
+    def __init__(self, profiles: CalibrationProfileRepository, config: Config, clock: Clock, credentials, changes):
         self.profiles, self.config, self.clock = profiles, config, clock
+        self.credentials, self.changes = credentials, changes
 
-    def handle(self, command: RegisterSensorNodeCommand) -> CalibrationProfile:
+    def handle(self, command: RegisterSensorNodeCommand, actor: str):
         if not command.device_code.strip():
             raise ValidationError("deviceCode es obligatorio")
         if command.sampling_interval_seconds <= 0:
             raise ValidationError("samplingIntervalSeconds debe ser mayor que cero")
         if self.profiles.find_by_sensor_node_id(command.device_code):
             raise ConflictError(f"El nodo {command.device_code} ya está registrado")
+        _validate_offset(command.temperature_offset, command.humidity_offset, self.config)
         now = self.clock()
         profile = CalibrationProfile(
             sensor_node_id=command.device_code,
@@ -54,21 +57,38 @@ class RegisterSensorNodeCommandService:
             calibrated_at=now,
             updated_at=now,
         )
-        return self.profiles.save(profile)
+        with database.atomic():
+            self.profiles.save(profile)
+            self.changes.record(profile, CalibrationOffset(), actor, now)
+            credential = self.credentials.issue(command.device_code)
+        return profile, credential
 
 
 class ApplyCalibrationCommandService:
     """Actualiza el Calibration Offset; solo afecta a las lecturas capturadas después del cambio."""
 
-    def __init__(self, profiles: CalibrationProfileRepository, clock: Clock):
+    def __init__(self, profiles: CalibrationProfileRepository, clock: Clock, config: Config, changes):
         self.profiles, self.clock = profiles, clock
+        self.config, self.changes = config, changes
 
-    def handle(self, command: ApplyCalibrationCommand) -> CalibrationProfile:
-        profile = self.profiles.find_by_sensor_node_id(command.device_code)
-        if profile is None:
-            raise NotFoundError(f"El nodo {command.device_code} no está registrado")
-        profile.update_offset(CalibrationOffset(command.temperature_offset, command.humidity_offset), self.clock())
-        return self.profiles.save(profile)
+    def handle(self, command: ApplyCalibrationCommand, actor: str) -> CalibrationProfile:
+        _validate_offset(command.temperature_offset, command.humidity_offset, self.config)
+        with database.atomic('IMMEDIATE'):
+            profile = self.profiles.find_by_sensor_node_id(command.device_code)
+            if profile is None:
+                raise NotFoundError(f"El nodo {command.device_code} no está registrado")
+            old_offset = profile.offset
+            now = self.clock()
+            profile.update_offset(CalibrationOffset(command.temperature_offset, command.humidity_offset), now)
+            self.profiles.save(profile)
+            self.changes.record(profile, old_offset, actor, now)
+        return profile
+
+
+def _validate_offset(temperature, humidity, config):
+    for value, limit in [(temperature, config.max_temperature_offset), (humidity, config.max_humidity_offset)]:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or abs(value) > limit:
+            raise ValidationError('Calibration offset is outside the configured finite limits')
 
 
 class CaptureSensorReadingCommandService:
@@ -91,15 +111,17 @@ class CaptureSensorReadingCommandService:
             raise NotFoundError(f"El nodo {command.device_code} no está registrado")
         now = self.clock()
         raw = RawReading(command.temperature, command.humidity, command.captured_at or now)
+        if not math.isfinite(raw.temperature) or not math.isfinite(raw.humidity):
+            raise ValidationError('Reading values must be finite')
         if not raw.has_valid_timestamp(now):
             raise ValidationError("capturedAt no puede estar en el futuro")
 
         with database.atomic():
             reading = self.calibration.process(command.device_code, raw, profile)
             self.readings.save(reading)
-            self._restore_if_offline(command.device_code, now)
             if reading.status == ReadingStatus.DISCARDED:
                 return reading
+            self._restore_if_offline(command.device_code, now)
             self._publish_or_buffer(reading, now)
         return reading
 
@@ -143,8 +165,8 @@ class SyncLocalBufferCommandService:
         self.cloud, self.clock = cloud, clock
 
     def handle(self, command: SyncLocalBufferCommand) -> dict:
-        if command.batch_size <= 0:
-            raise ValidationError("batchSize debe ser mayor que cero")
+        if type(command.batch_size) is not int or not 1 <= command.batch_size <= 500:
+            raise ValidationError("batchSize debe ser un entero entre 1 y 500")
         synced = 0
         while True:
             batch = self.synchronization.next_batch(self.buffer.pending_readings(limit=command.batch_size), command.batch_size)

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
+import math
 
 from ..application.errors import ValidationError
 from ..domain.model import CalibrationProfile, LocalBuffer, OfflineNode, SensorReading
@@ -18,10 +19,10 @@ def parse_instant(value) -> Optional[datetime]:
         return None
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, TypeError, OverflowError):
         raise ValidationError("capturedAt debe ser una fecha ISO-8601")
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
@@ -29,14 +30,33 @@ def require_number(body: dict, field: str, default: Optional[float] = None) -> f
     value = body.get(field, default)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValidationError(f"{field} es obligatorio y debe ser numérico")
-    return float(value)
+    try:
+        result = float(value)
+    except (OverflowError, ValueError):
+        raise ValidationError(f'{field} debe ser finito')
+    if not math.isfinite(result):
+        raise ValidationError(f'{field} debe ser finito')
+    return result
+
+
+def require_integer(body, field, default, minimum=1, maximum=2147483647):
+    value = body.get(field, default)
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValidationError(f'{field} debe ser un entero entre {minimum} y {maximum}')
+    return value
+
+
+def require_device_code(body):
+    code = body.get('deviceCode')
+    if (not isinstance(code, str) or not code.strip() or code != code.strip()
+            or len(code) > 100 or not code.isprintable()):
+        raise ValidationError('deviceCode debe ser texto no vacío de hasta 100 caracteres')
+    return code
 
 
 def raw_reading_resource_to_values(body: dict) -> dict:
     """RawReadingResource -> argumentos de CaptureSensorReadingCommand."""
-    device_code = body.get("deviceCode")
-    if not isinstance(device_code, str) or not device_code.strip():
-        raise ValidationError("deviceCode es obligatorio")
+    device_code = require_device_code(body)
     return {
         "device_code": device_code,
         "temperature": require_number(body, "temperature"),
