@@ -75,10 +75,43 @@ en SQLite: la capacidad limita pendientes, no el tamaño total de la base.
 
 ## Ejecución
 
+Para operación en Windows usa Python 3.12 y Waitress. Crea un venv nuevo e instala
+el lock de ejecución; el archivo de entorno de ejemplo no se carga automáticamente:
+
+```powershell
+python -m venv .venv
+& ./.venv/Scripts/python.exe -m pip install --require-hashes -r requirements.txt
+& ./.venv/Scripts/python.exe -m edge_api.server
+```
+
+Escucha en `EDGE_BIND_HOST` y `EDGE_PORT` (127.0.0.1:5000 por defecto), con cuatro
+hilos. Ctrl+C detiene servidor y runtime; para reiniciar conserva el mismo archivo
+SQLite. Usa un solo proceso por archivo de base. `run.py` queda para desarrollo.
+Para pruebas instala `requirements-test.txt` con `--require-hashes` en otro venv.
+
+### Vencimiento y rotación del gateway
+
+El health administrativo muestra `credentialExpiry`. Copia `expiresAt` de los
+metadatos Core a `EDGE_DEVICE_CREDENTIAL_EXPIRES_AT`; si falta, se muestra UNKNOWN.
+El aviso comienza siete días antes, configurable con `EDGE_CREDENTIAL_WARNING_SECONDS`.
+La fecha es información configurada del operador; no se deduce del secreto ni
+sustituye la validación de Core.
+
+1. Un ADMIN con sesión vigente rota mediante `POST /api/v1/gateways/{id}/credentials`.
+2. Detén Edge, sustituye en su entorno `EDGE_DEVICE_CREDENTIAL` y la fecha `expiresAt`
+   de esa respuesta, y conserva SQLite. No copies secretos a logs, nodos ni Git.
+3. Reinicia y consulta health/buffer: el worker reconcilia pendientes automáticamente.
+   Una credencial vencida conserva la cola; si el gateway fue revocado, registra
+   uno nuevo con los sensores permitidos y actualiza también `EDGE_GATEWAY_ID`.
+
+El archivo `.in` lista dependencias directas; los `.txt` fijan también transitivas
+y hashes. Para regenerarlos usa pip-tools con Python 3.12 y los comandos indicados
+al comienzo de cada lock. La ejecución no necesita pytest ni pip-tools.
+
 ```bash
 python -m venv .venv
 .venv\Scripts\activate        # Linux/macOS: source .venv/bin/activate
-pip install -r requirements.txt
+pip install --require-hashes -r requirements-test.txt
 # Set private environment variables first (see .env.example).
 python run.py                 # http://127.0.0.1:5000
 ```

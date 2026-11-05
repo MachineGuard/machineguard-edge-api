@@ -180,8 +180,12 @@ class DeliveryCoordinator:
 
     def health(self):
         state=DeliveryStateModel.get_by_id(self.config.gateway_id)
+        expiry=self.config.credential_expiration
+        expiry_state=('UNKNOWN' if expiry is None else 'EXPIRED' if expiry<=self.clock()
+                      else 'EXPIRING' if (expiry-self.clock()).total_seconds()<=self.config.credential_warning_seconds else 'VALID')
         oldest=LocalBufferEntryModel.select().order_by(LocalBufferEntryModel.enqueued_at).first()
         return {'transport':state.transport,'credential':state.credential,'code':state.code,
+                'credentialExpiry':{'status':expiry_state,'expiresAt':expiry,'source':'CONFIGURATION' if expiry else 'UNKNOWN'},
                 'lastAttemptAt':state.last_attempt_at,'lastConfirmedAt':state.last_confirmed_at,
                 'pending':self.buffer.count_pending(),
                 'quarantined':SensorReadingModel.select().where(SensorReadingModel.status==ReadingStatus.QUARANTINED.value).count(),

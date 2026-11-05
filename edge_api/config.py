@@ -42,8 +42,18 @@ class Config:
     delivery_lease_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_DELIVERY_LEASE_SECONDS', '30')))
     node_pause_seconds: float = field(default_factory=lambda: float(os.getenv('EDGE_NODE_PAUSE_SECONDS', '60')))
     offline_grace_ratio: float = field(default_factory=lambda: float(os.getenv('EDGE_OFFLINE_GRACE_RATIO', '0.25')))
+    device_credential_expires_at: str = field(default_factory=lambda: os.getenv('EDGE_DEVICE_CREDENTIAL_EXPIRES_AT',''))
+    credential_warning_seconds: int = field(default_factory=lambda: int(os.getenv('EDGE_CREDENTIAL_WARNING_SECONDS','604800')))
+    port: int = field(default_factory=lambda: int(os.getenv('EDGE_PORT','5000')))
+    wsgi_threads: int = field(default_factory=lambda: int(os.getenv('EDGE_WSGI_THREADS','4')))
 
     def validate(self) -> None:
+        if not 1 <= self.port <= 65535 or not 1 <= self.wsgi_threads <= 32 or not 1 <= self.credential_warning_seconds <= 31622400:
+            raise ValueError('Invalid Edge server or credential warning configuration')
+        try:
+            self.credential_expiration
+        except (ValueError,OverflowError,TypeError):
+            raise ValueError('EDGE_DEVICE_CREDENTIAL_EXPIRES_AT requires an ISO-8601 date with explicit timezone') from None
         if self.admin_key == 'replace-with-at-least-32-random-bytes':
             raise ValueError('EDGE_ADMIN_KEY must not use the published example value')
         if not 32 <= len(self.admin_key.encode('utf-8')) <= 4096:
@@ -99,6 +109,15 @@ class Config:
         value = datetime.fromisoformat(self.min_captured_at.replace('Z', '+00:00'))
         if value.tzinfo is None:
             raise ValueError('EDGE_MIN_CAPTURED_AT requires an explicit timezone')
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    @property
+    def credential_expiration(self):
+        if not self.device_credential_expires_at:
+            return None
+        value=datetime.fromisoformat(self.device_credential_expires_at.replace('Z','+00:00'))
+        if value.tzinfo is None:
+            raise ValueError('Credential expiry requires a timezone')
         return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 

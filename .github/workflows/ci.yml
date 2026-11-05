@@ -19,7 +19,7 @@ jobs:
           cache: pip
 
       - name: Instalar dependencias
-        run: pip install -r requirements.txt
+        run: pip install --require-hashes -r requirements-test.txt
 
       - name: Ejecutar pruebas (pytest + pytest-bdd)
         run: |

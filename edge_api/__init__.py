@@ -101,6 +101,11 @@ def create_app(
     app.config["services"] = services
     app.register_blueprint(build_blueprint(services))
 
+    @app.teardown_appcontext
+    def close_request_database(_error):
+        if not database.is_closed():
+            database.close()
+
     @app.errorhandler(ApplicationError)
     def handle_application_error(error: ApplicationError):
         return jsonify({"error": error.message}), error.status_code
