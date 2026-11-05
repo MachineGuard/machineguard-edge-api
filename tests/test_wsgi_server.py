@@ -10,6 +10,32 @@ from edge_api.config import Config
 from edge_api.server import EdgeServer
 
 
+def test_wsgi_close_during_poll_does_not_raise_socket_error(tmp_path):
+    from types import SimpleNamespace
+    entered=threading.Event();closed=threading.Event();errors=[]
+    instance=EdgeServer.__new__(EdgeServer)
+    instance._lock=threading.Lock();instance._closed=False
+    instance._stopping=threading.Event();instance._running=False
+    instance.app=SimpleNamespace(config={'services':SimpleNamespace(runtime=SimpleNamespace(stop=lambda:None))})
+    def poll(*args,**kwargs):
+        entered.set()
+        if closed.wait(.2):raise OSError(10038,'socket closed while select was active')
+    class SocketDouble:
+        def __init__(self):self._map={};self.task_dispatcher=SimpleNamespace(shutdown=lambda **k:None)
+        def run(self):poll()
+        def close(self):closed.set()
+    instance.server=SocketDouble()
+    from edge_api import server as module
+    from unittest.mock import patch
+    def run():
+        try:instance.run()
+        except BaseException as error:errors.append(type(error).__name__)
+    with patch.object(module.wasyncore,'loop',poll),patch.object(module.wasyncore,'close_all',lambda m:closed.set()):
+        thread=threading.Thread(target=run);thread.start();assert entered.wait(1)
+        instance.close();thread.join(2)
+    assert not thread.is_alive() and errors==[]
+
+
 def test_wsgi_stops_cleanly_and_restarts_with_same_pending_identity(tmp_path):
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]

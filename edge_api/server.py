@@ -13,6 +13,8 @@ class EdgeServer:
         self.app=create_app(self.config)
         self._lock=threading.Lock()
         self._closed=False
+        self._stopping=threading.Event()
+        self._running=False
         try:
             self.server=create_server(self.app,host=self.config.bind_host,port=self.config.port,
                                       threads=self.config.wsgi_threads,asyncore_loop_timeout=.2)
@@ -21,14 +23,21 @@ class EdgeServer:
             raise
 
     def run(self):
+        with self._lock:
+            if self._closed:return
+            self._running=True
         try:
-            self.server.run()
+            # Close sockets on the polling thread, after select returns (Windows-safe).
+            while not self._stopping.is_set():
+                wasyncore.loop(timeout=.2,map=self.server._map,count=1)
         finally:
+            with self._lock:self._running=False
             self.close()
 
     def close(self):
+        self._stopping.set()
         with self._lock:
-            if self._closed:return
+            if self._closed or self._running:return
             self._closed=True
             try:
                 self.app.config['services'].runtime.stop()
