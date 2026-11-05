@@ -75,6 +75,39 @@ en SQLite: la capacidad limita pendientes, no el tamaño total de la base.
 
 ## Ejecución
 
+### ThingSpeak opcional
+
+Está apagado por defecto. Configura `THINGSPEAK_ENABLED=true`, el `DEVICE_CODE`,
+`CHANNEL_ID` y `WRITE_KEY` del ejemplo de entorno. Usa un canal dedicado a ese
+nodo y a esta instancia Edge, sin otros escritores. No cambies el nodo ni la
+ventana de un canal ya registrado; usa otro canal para otra selección.
+
+El worker secundario lee muestras válidas ya guardadas desde su habilitación.
+Agrupa por recepción UTC en ventanas de 20 s como mínimo: `field1` es temperatura
+media calibrada en °C, `field2` humedad media en % HR y `field3` cantidad.
+No rellena muestras ausentes ni sustituye los originales enviados a Core.
+Congela valores e IDs de origen al cerrar la ventana. La clave solo viaja en
+cabecera HTTPS; no llega al firmware. La licencia gratuita es no comercial y
+exige al menos 15 s por canal; Edge espera una ventana entre intentos, también
+al recuperar pendientes. [Límites oficiales](https://thingspeak.mathworks.com/pages/license_faq).
+
+Consulta `thingspeak` en `/health`, `/thingspeak/jobs?state=UNCERTAIN&limit=50&offset=0`
+y `/thingspeak/losses`, con la clave administrativa. La capacidad limita las
+ventanas pendientes; un desborde conserva motivo y fuentes, sin borrar evidencia
+primaria. La base crece con el historial; no hay purga automática.
+
+Un ID positivo completo confirma ThingSpeak; `0` conserva pendiente. Una respuesta
+perdida puede haber guardado datos remotos: queda `UNCERTAIN`, sin retry automático.
+Busca el identificador `mg:<id>` del payload en el canal antes de usar
+`POST /thingspeak/jobs/{id}/reconcile` con `{"action":"confirmed","entryId":123}`
+o `{"action":"abandon"}`. Para reintentar explícitamente usa
+`{"action":"retry","acceptDuplicateRisk":true}`: puede duplicar el registro remoto.
+Un envío secundario nunca confirma Core. Conserva SQLite al reiniciar.
+
+Un canal real y la aceptación docente requieren comprobación posterior; las
+pruebas locales usan un doble HTTP. ThingSpeak no resuelve los pendientes de
+NTP/NVS, Wi-Fi virtual, IO ESP32, Docker ni hardware.
+
 Para operación en Windows usa Python 3.12 y Waitress. Crea un venv nuevo e instala
 el lock de ejecución; el archivo de entorno de ejemplo no se carga automáticamente:
 
@@ -189,3 +222,7 @@ Configuración de ejemplo: `.env.example` (el proceso recibe las variables del e
 `tests/test_live_core.py` usa la API real de IAM, configuración, gateways, mediciones y atención de incidentes. Preparar un Core y PostgreSQL **aislados de producción** y definir `MACHINEGUARD_CORE_URL`, `MACHINEGUARD_CORE_ADMIN_EMAIL` y `MACHINEGUARD_CORE_ADMIN_PASSWORD` solo en el entorno del proceso de pruebas. Ejecutar `python -m pytest tests/test_live_core.py`.
 
 Las pruebas crean zonas y sensores con nombres E2E, aprovisionan credenciales limitadas, ejercitan calibración y lectura real, reconocimiento/acción/resolución, pérdida de confirmación y revocación con recuperación del buffer. Revocan las credenciales de pruebas al finalizar. Sin esas variables se omiten explícitamente; el resto de la suite sigue siendo autónomo. No ejecutarlas sobre una organización con datos reales.
+
+La CI añade integración con PostgreSQL real y ambos SHA registrados mediante
+`scripts/edge-core-integration.py`; requiere los dos checkouts y bases desechables
+`mgci`/`mgci_test` en loopback. Sus comandos se describen en `scripts/ci.md`.
