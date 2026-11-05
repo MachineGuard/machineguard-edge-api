@@ -1,7 +1,9 @@
 """Bounded outbox delivery. SQLite transactions end before every network call."""
 import math
+import logging
 import threading
 import uuid
+from peewee import DatabaseError
 from datetime import datetime, timedelta, timezone
 
 from ..domain.model import ReadingStatus
@@ -10,6 +12,8 @@ from ..infrastructure.models import (database, SensorReadingModel, LocalBufferEn
     DeliveryAttemptModel, QuarantineModel, DeliveryLossModel, NodeDeliveryStateModel, DeliveryStateModel)
 from ..infrastructure.repositories import SensorReadingRepository
 from .errors import ValidationError, NotFoundError, ConflictError
+
+logger = logging.getLogger(__name__)
 
 
 def _real_now():
@@ -153,9 +157,14 @@ class DeliveryCoordinator:
             pending = self.buffer.count_pending()
             return {'synced':synced,'pending':pending,'bufferSynced':synced>0 and pending==0}
         finally:
-            DeliveryStateModel.update(lease_owner=None,lease_until=None).where(
-                (DeliveryStateModel.gateway_id==self.config.gateway_id) & (DeliveryStateModel.lease_owner==self.owner)).execute()
-            self.lock.release()
+            try:
+                DeliveryStateModel.update(lease_owner=None,lease_until=None).where(
+                    (DeliveryStateModel.gateway_id==self.config.gateway_id) & (DeliveryStateModel.lease_owner==self.owner)).execute()
+            except DatabaseError:
+                # Leave persistent lease/inflight expiry intact for the next cycle.
+                logger.warning('Delivery lease cleanup failed; a later cycle will reconcile pending readings')
+            finally:
+                self.lock.release()
 
     def enforce_capacity(self):
         overflow = self.buffer.count_pending()-self.config.buffer_capacity
