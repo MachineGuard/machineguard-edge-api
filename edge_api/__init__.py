@@ -15,6 +15,7 @@ from .application.command_services import (
 )
 from .application.errors import ApplicationError
 from .application.delivery import DeliveryCoordinator
+from .application.thingspeak import ThingSpeakDelivery
 from .application.runtime import EdgeRuntime, stop_previous_runtime
 from .application.node_credentials import NodeCredentialService
 from .application.query_services import (
@@ -80,6 +81,7 @@ def create_app(
 
     services = SimpleNamespace(
         config=config,
+        thingspeak=ThingSpeakDelivery(config,clock),
         register_node=RegisterSensorNodeCommandService(profiles, config, clock, credentials, changes),
         apply_calibration=ApplyCalibrationCommandService(profiles, clock, config, changes),
         credentials=credentials,

@@ -46,6 +46,38 @@ class Config:
     credential_warning_seconds: int = field(default_factory=lambda: int(os.getenv('EDGE_CREDENTIAL_WARNING_SECONDS','604800')))
     port: int = field(default_factory=lambda: int(os.getenv('EDGE_PORT','5000')))
     wsgi_threads: int = field(default_factory=lambda: int(os.getenv('EDGE_WSGI_THREADS','4')))
+    thingspeak_enabled: bool = field(default_factory=lambda: os.getenv('THINGSPEAK_ENABLED','false').lower()=='true')
+    thingspeak_device_code: str = field(default_factory=lambda: os.getenv('THINGSPEAK_DEVICE_CODE',''))
+    thingspeak_channel_id: str = field(default_factory=lambda: os.getenv('THINGSPEAK_CHANNEL_ID',''))
+    thingspeak_write_key: str = field(default_factory=lambda: os.getenv('THINGSPEAK_WRITE_KEY',''),repr=False)
+    thingspeak_window_seconds: int = field(default_factory=lambda: os.getenv('THINGSPEAK_WINDOW_SECONDS','20'))
+    thingspeak_capacity: int = field(default_factory=lambda: os.getenv('THINGSPEAK_CAPACITY','1000'))
+    thingspeak_max_samples: int = field(default_factory=lambda: os.getenv('THINGSPEAK_MAX_SAMPLES','500'))
+    thingspeak_scan_size: int = field(default_factory=lambda: os.getenv('THINGSPEAK_SCAN_SIZE','100'))
+    thingspeak_poll_seconds: float = field(default_factory=lambda: os.getenv('THINGSPEAK_POLL_SECONDS','1'))
+    thingspeak_backoff_seconds: float = field(default_factory=lambda: os.getenv('THINGSPEAK_BACKOFF_SECONDS','20'))
+    thingspeak_max_backoff_seconds: float = field(default_factory=lambda: os.getenv('THINGSPEAK_MAX_BACKOFF_SECONDS','300'))
+    thingspeak_http_seconds: float = field(default_factory=lambda: os.getenv('THINGSPEAK_HTTP_SECONDS','5'))
+
+    def thingspeak_configuration(self):
+        # Invalid optional configuration disables only the secondary integration.
+        if not self.thingspeak_enabled:return 'DISABLED'
+        if not all((self.thingspeak_device_code,self.thingspeak_channel_id,self.thingspeak_write_key)):
+            return 'MISSING_CONFIGURATION'
+        try:
+            for name,minimum,maximum,convert in [
+                ('window_seconds',20,86400,int),('capacity',1,10000,int),('max_samples',1,500,int),
+                ('scan_size',1,500,int),('poll_seconds',.1,60,float),('backoff_seconds',20,86400,float),
+                ('max_backoff_seconds',20,86400,float),('http_seconds',.2,5,float)]:
+                value=convert(getattr(self,'thingspeak_'+name))
+                if not math.isfinite(value) or not minimum<=value<=maximum:raise ValueError()
+                setattr(self,'thingspeak_'+name,value)
+            if self.thingspeak_max_backoff_seconds<self.thingspeak_backoff_seconds:raise ValueError()
+            if not re.fullmatch(r'[1-9][0-9]{0,19}',self.thingspeak_channel_id):raise ValueError()
+            if not 1<=len(self.thingspeak_device_code)<=100 or not self.thingspeak_device_code.isprintable():raise ValueError()
+            if not 16<=len(self.thingspeak_write_key)<=256 or any(ord(c)<33 or ord(c)>126 for c in self.thingspeak_write_key):raise ValueError()
+        except (ValueError,TypeError,OverflowError):return 'INVALID_CONFIGURATION'
+        return 'READY'
 
     def validate(self) -> None:
         if not 1 <= self.port <= 65535 or not 1 <= self.wsgi_threads <= 32 or not 1 <= self.credential_warning_seconds <= 31622400:

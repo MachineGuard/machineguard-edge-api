@@ -7,6 +7,7 @@ from peewee import (
     ForeignKeyField,
     IntegerField,
     Model,
+    TextField,
     SqliteDatabase,
 )
 
@@ -156,6 +157,57 @@ class DeliveryStateModel(BaseModel):
 DELIVERY_MODELS = [DeliveryAttemptModel, QuarantineModel, DeliveryLossModel, NodeDeliveryStateModel, DeliveryStateModel]
 
 
+class ThingSpeakChannelModel(BaseModel):
+    channel_id = CharField(primary_key=True)
+    device_code = CharField()
+    window_seconds = IntegerField()
+    cursor = IntegerField(default=0)
+    next_attempt_at = DateTimeField(null=True)
+    lease_owner = CharField(null=True)
+    lease_until = DateTimeField(null=True)
+    last_attempt_at = DateTimeField(null=True)
+    last_confirmed_at = DateTimeField(null=True)
+    code = CharField(default='NOT_ATTEMPTED')
+
+
+class ThingSpeakJobModel(BaseModel):
+    id = CharField(primary_key=True)
+    channel = ForeignKeyField(ThingSpeakChannelModel,on_delete='RESTRICT')
+    window_start = DateTimeField()
+    window_end = DateTimeField()
+    source_ids = TextField(default='[]')
+    count = IntegerField(default=0)
+    temperature_sum = FloatField(default=0)
+    humidity_sum = FloatField(default=0)
+    payload = TextField(null=True)
+    state = CharField(default='OPEN',index=True)
+    code = CharField(default='ACCUMULATING')
+    frozen_at = DateTimeField(null=True)
+    attempts = IntegerField(default=0)
+    entry_id = CharField(null=True)
+
+    class Meta:
+        indexes = ((('channel','window_start'),True),)
+
+
+class ThingSpeakAttemptModel(BaseModel):
+    job = ForeignKeyField(ThingSpeakJobModel,on_delete='RESTRICT')
+    at = DateTimeField()
+    code = CharField()
+    actor = CharField(null=True)
+    entry_id = CharField(null=True)
+
+
+class ThingSpeakSourceLossModel(BaseModel):
+    channel = ForeignKeyField(ThingSpeakChannelModel,on_delete='RESTRICT')
+    reading = ForeignKeyField(SensorReadingModel,on_delete='RESTRICT')
+    at = DateTimeField()
+    code = CharField()
+
+
+THINGSPEAK_MODELS = [ThingSpeakChannelModel,ThingSpeakJobModel,ThingSpeakAttemptModel,ThingSpeakSourceLossModel]
+
+
 def init_database(path: str) -> None:
     if not database.is_closed():
         database.close()
@@ -165,7 +217,7 @@ def init_database(path: str) -> None:
     # Legacy readings retain NULL identities and all their original evidence.
     with database.atomic('IMMEDIATE'):
         version = database.pragma('user_version')
-        if version > 3:
+        if version > 4:
             raise ValueError('Unsupported Edge database schema version')
         database.create_tables(ALL_MODELS)
         if version == 0:
@@ -189,3 +241,6 @@ def init_database(path: str) -> None:
                     database.execute_sql(f'ALTER TABLE {table} ADD COLUMN {name} {definition}')
             database.create_tables(DELIVERY_MODELS)
             database.pragma('user_version', 3)
+        if version < 4:
+            database.create_tables(THINGSPEAK_MODELS)
+            database.pragma('user_version', 4)

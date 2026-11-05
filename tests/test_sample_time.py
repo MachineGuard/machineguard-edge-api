@@ -188,7 +188,7 @@ def test_v1_migration_preserves_every_row_and_credentials_then_restarts(legacy_v
     c=create_app(old.config,cloud,clock).test_client()
     after={t:list(database.execute_sql('SELECT '+','.join(cs)+' FROM '+t+' ORDER BY 1')) for t,cs in old.columns.items()}
     assert after==old.before
-    assert database.pragma('user_version')==3
+    assert database.pragma('user_version')==4
     assert list(database.execute_sql('SELECT sample_id FROM sensor_readings'))==[(None,)]*3
     c=create_app(old.config,cloud,clock).test_client()
     r=c.post(BASE+'/readings',headers={'X-Node-Credential':old.token},

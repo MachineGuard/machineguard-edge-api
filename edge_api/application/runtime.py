@@ -21,14 +21,19 @@ class EdgeRuntime:
         self.stopped = threading.Event()
         self.thread = None
         self.availability_thread = None
+        self.secondary_thread = None
 
     def start(self):
         global _runtime
         _runtime = self
         config = self.services.config
-        if not (config.enable_delivery_worker or config.enable_availability_loop):
+        if not (config.enable_delivery_worker or config.enable_availability_loop or self.services.thingspeak.code=='READY'):
             return
         self.services.sync.cancelled = self.stopped.is_set
+        self.services.thingspeak.cancelled = self.stopped.is_set
+        if self.services.thingspeak.code=='READY':
+            self.secondary_thread=threading.Thread(target=self._secondary_loop,name='thingspeak-delivery',daemon=True)
+            self.secondary_thread.start()
         if config.enable_delivery_worker:
             self.thread = threading.Thread(target=self._loop,name='edge-delivery',daemon=True)
             self.thread.start()
@@ -39,11 +44,19 @@ class EdgeRuntime:
 
     def stop(self):
         self.stopped.set()
-        for thread in (self.thread,self.availability_thread):
+        for thread in (self.thread,self.availability_thread,self.secondary_thread):
             if thread and thread is not threading.current_thread():
                 thread.join(timeout=12)
                 if thread.is_alive():
                     raise RuntimeError('Edge worker did not stop; database cannot be replaced')
+
+    def _secondary_loop(self):
+        while not self.stopped.wait(self.services.config.thingspeak_poll_seconds):
+            try:self.services.thingspeak.cycle()
+            except Exception:
+                logger.warning('Secondary cycle failed; durable work retained for review/recovery')
+            finally:
+                if not database.is_closed():database.close()
 
     def _loop(self):
         config = self.services.config

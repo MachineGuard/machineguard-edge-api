@@ -232,7 +232,7 @@ def test_v2_migration_preserves_identity_credentials_pending_and_is_repeatable(c
         connection.execute('PRAGMA user_version=2')
         before={t:connection.execute('SELECT * FROM '+t).fetchall() for t in ['sensor_readings','local_buffer_entries','node_credentials','calibration_changes']}
     init_database(path)
-    assert database.pragma('user_version')==3
+    assert database.pragma('user_version')==4
     with sqlite3.connect(path) as connection:
         for table,rows in before.items():
             columns=connection.execute('PRAGMA table_info('+table+')').fetchall()

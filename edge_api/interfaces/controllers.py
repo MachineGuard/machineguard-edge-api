@@ -150,7 +150,28 @@ def build_blueprint(c) -> Blueprint:
 
     @bp.get("/health")
     def health():
-        return jsonify({"status": "UP", "gatewayId": c.config.gateway_id, 'delivery':_dates(c.sync.health())})
+        return jsonify({"status": "UP", "gatewayId": c.config.gateway_id, 'delivery':_dates(c.sync.health()),
+                        'thingspeak':_dates(c.thingspeak.health())})
+
+    @bp.get('/thingspeak/jobs')
+    def secondary_jobs():
+        return jsonify(_dates(c.thingspeak.jobs(_limit(),secondary_offset(),request.args.get('state'))))
+
+    def secondary_offset():
+        try:
+            value=int(request.args.get('offset',0))
+            if value<0:raise ValueError()
+            return value
+        except ValueError:raise ValidationError('offset debe ser un entero no negativo')
+
+    @bp.get('/thingspeak/losses')
+    def secondary_losses():
+        return jsonify(_dates(c.thingspeak.losses(_limit(),secondary_offset())))
+
+    @bp.post('/thingspeak/jobs/<identity>/reconcile')
+    def reconcile_secondary(identity):
+        c.thingspeak.reconcile(identity,_json_body(),g.admin_actor)
+        return jsonify({'recorded':True}),202
 
     @bp.get('/quarantine')
     def quarantine():

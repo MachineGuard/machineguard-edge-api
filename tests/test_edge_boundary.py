@@ -251,7 +251,7 @@ def test_migration_preserves_legacy_evidence_and_needs_explicit_node_provisionin
     c = create_app(config, cloud, clock).test_client()
     after = {t._meta.table_name: list(database.execute_sql('SELECT * FROM '+t._meta.table_name)) for t in tables}
     assert before == after
-    assert database.pragma('user_version') == 3
+    assert database.pragma('user_version') == 4
     assert c.post(BASE+'/readings', json={'deviceCode':'legacy','temperature':5,'humidity':50}).status_code == 401
     admin = {'X-Edge-Admin-Key':key}
     issued = c.post(BASE+'/sensor-nodes/legacy/credentials', headers=admin)
