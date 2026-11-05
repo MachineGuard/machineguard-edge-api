@@ -5,12 +5,14 @@ import threading
 import time
 
 import requests
+import pytest
 
 from edge_api.config import Config
 from edge_api.server import EdgeServer
 
 
-def test_wsgi_close_during_poll_does_not_raise_socket_error(tmp_path):
+@pytest.mark.parametrize('multiple',[False,True])
+def test_wsgi_close_during_poll_does_not_raise_socket_error(tmp_path,multiple):
     from types import SimpleNamespace
     entered=threading.Event();closed=threading.Event();errors=[]
     instance=EdgeServer.__new__(EdgeServer)
@@ -25,6 +27,8 @@ def test_wsgi_close_during_poll_does_not_raise_socket_error(tmp_path):
         def run(self):poll()
         def close(self):closed.set()
     instance.server=SocketDouble()
+    if multiple:
+        instance.server.map=instance.server._map;del instance.server._map
     from edge_api import server as module
     from unittest.mock import patch
     def run():

@@ -29,7 +29,8 @@ class EdgeServer:
         try:
             # Close sockets on the polling thread, after select returns (Windows-safe).
             while not self._stopping.is_set():
-                wasyncore.loop(timeout=.2,map=self.server._map,count=1)
+                channels=self.server._map if hasattr(self.server,'_map') else self.server.map
+                wasyncore.loop(timeout=.2,map=channels,count=1)
         finally:
             with self._lock:self._running=False
             self.close()
