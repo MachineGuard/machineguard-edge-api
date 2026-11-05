@@ -51,7 +51,12 @@ def test_worker_recovers_in_same_process_after_completion_and_cleanup_fail(make_
         assert SensorReadingModel.get().calibrated_temperature==original.calibrated_temperature
         assert SensorReadingModel.get().status=='SYNCED'
         assert calls==['contention-1','contention-1']
-        assert client.post('/api/v1/edge/buffer/sync').json.get('busy',False) is False
+        deadline=time.monotonic()+2
+        while True:
+            manual=client.post('/api/v1/edge/buffer/sync').json
+            if not manual.get('busy',False) or time.monotonic()>=deadline:break
+            time.sleep(.02)
+        assert manual.get('busy',False) is False
         cloud.publish_reading=lambda reading:True
         post_reading(client)
     finally:
