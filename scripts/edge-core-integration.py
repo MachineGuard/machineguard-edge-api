@@ -3,9 +3,12 @@
 Requires a Python venv installed from Edge's requirements-test.txt with --require-hashes.
 DB_URL and MACHINEGUARD_TEST_DB_URL must point to separate, disposable mgci databases.
 """
-import argparse,importlib.util,json,os,re,secrets,shutil,socket,subprocess,sys,tempfile,time
+import argparse,importlib.util,json,os,re,secrets,shutil,socket,subprocess,sys,tempfile,time,traceback
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from output_sanitizer import sanitize_text,redirect_report_path,publish_artifacts
 
 import requests
 
@@ -41,19 +44,30 @@ class Run:
         self.base=f'http://127.0.0.1:{free_port()}';self.process=None;self.core_log=None;self.starts=0
 
     def clean(self,text):
-        for value in self.private:text=text.replace(value,'[REDACTED]')
-        text=re.sub(r'\b(?:mgn_|mgw_)[A-Za-z0-9_-]+','[CREDENTIAL_REDACTED]',text)
-        return re.sub(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+','[JWT_REDACTED]',text)
+        return sanitize_text(text,self.private)
 
-    def command(self,label,argv,cwd,env=None):
+    def command(self,label,argv,cwd,env=None,timeout=1200):
         start=time.monotonic()
-        p=subprocess.run(list(map(str,argv)),cwd=cwd,env=env or self.env,capture_output=True,text=True,
-            encoding='utf-8',errors='replace',timeout=1200)
-        (self.report/(label+'.log')).write_text(self.clean(p.stdout+p.stderr),encoding='utf-8')
+        with tempfile.TemporaryDirectory(prefix='private-reports-',dir=self.runtime) as temporary:
+            staging=Path(temporary)
+            assert staging.resolve().is_relative_to(self.runtime.resolve())
+            args=[redirect_report_path(value,self.report,staging) for value in argv]
+            command_env={key:redirect_report_path(value,self.report,staging) for key,value in (env or self.env).items()}
+            try:
+                p=subprocess.run(args,cwd=cwd,env=command_env,capture_output=True,text=True,
+                    encoding='utf-8',errors='replace',timeout=timeout)
+                code=p.returncode;output=p.stdout+p.stderr
+            except subprocess.TimeoutExpired as error:
+                def decode(value):return value.decode('utf-8',errors='replace') if isinstance(value,bytes) else value or ''
+                code=124;output=decode(error.stdout)+decode(error.stderr)+'\nCommand timed out\n'
+            except OSError as error:
+                code=127;output='Command could not start: '+str(error)
+            publish_artifacts(staging,self.report,self.clean)
+        (self.report/(label+'.log')).write_text(self.clean(output),encoding='utf-8')
         self.result['commands'].append({'label':label,'argv':list(map(str,argv)),'cwd':str(cwd),
-            'exitCode':p.returncode,'seconds':round(time.monotonic()-start,3)})
-        self.save();print(label,'exit',p.returncode,flush=True)
-        if p.returncode:raise RuntimeError(label+' failed; inspect sanitized report')
+            'exitCode':code,'seconds':round(time.monotonic()-start,3)})
+        self.save();print(self.clean(label),'exit',code,flush=True)
+        if code:raise RuntimeError(label+' failed; inspect sanitized report')
 
     def save(self):
         (self.report/'results.json').write_text(self.clean(json.dumps(self.result,indent=2)),encoding='utf-8')
@@ -93,12 +107,15 @@ class Run:
             return self.contracts()
         unit_env=dict(self.env)
         for key in ('DB_URL','DB_USERNAME','DB_PASSWORD','MACHINEGUARD_TEST_DB_URL','JAVA_TOOL_OPTIONS'):unit_env.pop(key,None)
-        self.command('core-verify',[maven,'-B','verify'],self.core,unit_env)
-        self.result['coreUnitTests']=sum(int(ET.parse(p).getroot().get('tests','0')) for p in self.core.glob('target/surefire-reports/TEST-*.xml'))
+        reports=['-Dmachineguard.test.reports.directory='+str(self.report/'core-unit-surefire'),
+            '-Dcucumber.plugin=pretty,summary,junit:'+str(self.report/'core-unit-cucumber/cucumber.xml')]
+        self.command('core-verify',[maven,'-B',*reports,'verify'],self.core,unit_env)
+        self.result['coreUnitTests']=sum(int(ET.parse(p).getroot().get('tests','0')) for p in (self.report/'core-unit-surefire').glob('TEST-*.xml'))
         subset='GatewayCredentialApiIntegrationTest,GatewayIngestionApiIntegrationTest,AlertIncidentFlowIntegrationTest,MeasurementTimeApiIntegrationTest,WriteSessionApiIntegrationTest,WriteRouteCoverageIntegrationTest,LoginRateLimitApiIntegrationTest'
         test_env=dict(self.env,JAVA_TOOL_OPTIONS='-Dspring.datasource.driver-class-name=org.postgresql.Driver '
             '-Dspring.datasource.username='+self.env.get('DB_USERNAME','mgci')+' -Dspring.datasource.password=')
-        self.command('core-postgres',[maven,'-B','-Dtest='+subset,'test'],self.core,test_env)
+        self.command('core-postgres',[maven,'-B','-Dtest='+subset,
+            '-Dmachineguard.test.reports.directory='+str(self.report/'core-postgres-surefire'),'test'],self.core,test_env)
         self.result['postgresSubset']='Repeated subset; not added to Core unit suite total'
         self.contracts()
 
@@ -129,12 +146,15 @@ def main():
     p.add_argument('--maven',default='mvn.cmd' if os.name=='nt' else 'mvn')
     p.add_argument('--core-sha');p.add_argument('--edge-sha');p.add_argument('--contracts-only',action='store_true');args=p.parse_args()
     run=Run(args)
-    try:run.execute()
-    finally:
-        run.stop_core();run.save()
-        for path in run.report.rglob('*'):
-            if path.is_file() and path.suffix in ('.log','.xml','.json'):
-                path.write_text(run.clean(path.read_text(encoding='utf-8',errors='replace')),encoding='utf-8')
+    try:
+        try:run.execute()
+        finally:
+            try:run.stop_core()
+            finally:run.save()
+    except Exception:
+        print(run.clean(traceback.format_exc()),file=sys.stderr)
+        return 1
+    return 0
 
 
-if __name__=='__main__':main()
+if __name__=='__main__':sys.exit(main())

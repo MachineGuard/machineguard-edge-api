@@ -17,6 +17,10 @@ El runner ejecuta Core completo, repite el subconjunto PostgreSQL, inicia Core,
 ejecuta Edge completo sin permitir live omitidas y ensaya ThingSpeak con doble
 loopback. Genera sesiones sintéticas con IAM real y detiene únicamente su Core.
 PostgreSQL lo detiene quien lo preparó. `--maven` permite indicar el ejecutable.
+Los reportes de subprocesos se generan en un área temporal privada y se sanean
+antes de publicarse en `--report`, también si falla la prueba o vence su tiempo.
+Incluye Surefire/Cucumber y JUnit de Edge. Maven normal conserva sus reportes
+predeterminados; se conservan códigos de salida y diagnósticos sin credenciales.
 Los SHA suministrados con `--core-sha`/`--edge-sha` se reservan a copias Git archive
 comprobadas; normalmente se leen del checkout.
 
