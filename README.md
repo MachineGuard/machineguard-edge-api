@@ -96,6 +96,12 @@ y `/thingspeak/losses`, con la clave administrativa. La capacidad limita las
 ventanas pendientes; un desborde conserva motivo y fuentes, sin borrar evidencia
 primaria. La base crece con el historial; no hay purga automática.
 
+`thingspeak.lastObservation` en `/health` muestra el último intento y sus fases
+observadas, con tiempos relativos e IDs locales de intento y trabajo. Se conserva
+solo en memoria; `UNKNOWN` significa que la fase no se observó. HTTP iniciado no
+demuestra que DNS o TLS hayan terminado. Los logs acotados permiten correlacionar
+el intento sin incluir claves ni payloads; el progreso no confirma un envío.
+
 Un ID positivo completo confirma ThingSpeak; `0` conserva pendiente. Una respuesta
 perdida puede haber guardado datos remotos: queda `UNCERTAIN`, sin retry automático.
 Busca el identificador `mg:<id>` del payload en el canal antes de usar

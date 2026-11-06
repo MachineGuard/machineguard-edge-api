@@ -1,5 +1,6 @@
 """Independent, append-only secondary aggregation and delivery; never owns Core's queue."""
 import json
+import logging
 import math
 import threading
 import time
@@ -14,6 +15,7 @@ from ..infrastructure.models import (database,SensorReadingModel,ThingSpeakChann
 from ..infrastructure.thingspeak_client import ThingSpeakClient
 
 ACTIVE=('OPEN','PENDING','SENDING','UNCERTAIN')
+logger=logging.getLogger(__name__)
 
 
 class ThingSpeakDelivery:
@@ -23,6 +25,7 @@ class ThingSpeakDelivery:
         self.code=config.thingspeak_configuration()
         self.lock=threading.Lock();self.owner=uuid.uuid4().hex;self.cancelled=lambda:False
         self.client=ThingSpeakClient(config.thingspeak_http_seconds if self.code=='READY' else 5)
+        self.last_observation=None
         if self.code=='READY':
             with database.atomic('IMMEDIATE'):
                 channel,created=Channel.get_or_create(channel_id=config.thingspeak_channel_id,defaults={
@@ -113,6 +116,13 @@ class ThingSpeakDelivery:
             except Exception:
                 from ..infrastructure.thingspeak_client import ThingSpeakResult
                 result=ThingSpeakResult('UNCERTAIN','TRANSPORT_ERROR')
+            if isinstance(self.client,ThingSpeakClient):
+                diagnostic=self.client.diagnostics()
+                if diagnostic is not None:
+                    self.last_observation={**diagnostic,'jobId':job.id}
+                    try:logger.log(logging.WARNING if result.state=='UNCERTAIN' else logging.INFO,
+                        'ThingSpeak local job %s attempt %s',job.id,diagnostic['attemptId'])
+                    except Exception:pass
             now=self.clock()
             with database.atomic('IMMEDIATE'):
                 channel=self._channel()
@@ -137,6 +147,7 @@ class ThingSpeakDelivery:
         pending=Job.select().where(Job.state.in_(ACTIVE))
         oldest=pending.order_by(Job.window_start).first()
         return {'enabled':self.code=='READY','configuration':self.code,
+            'lastObservation':self.last_observation,
             'channelId':channel.channel_id if channel else None,'deviceCode':channel.device_code if channel else None,
             'windowSeconds':channel.window_seconds if channel else None,
             'code':channel.code if self.code=='READY' and channel else self.code,
