@@ -9,6 +9,7 @@ class CaptureSensorReadingCommand:
     temperature: float
     humidity: float
     captured_at: Optional[datetime] = None
+    sample_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

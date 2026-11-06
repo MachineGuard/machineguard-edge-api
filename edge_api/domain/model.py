@@ -9,6 +9,8 @@ class ReadingStatus(str, Enum):
     CALIBRATED = "CALIBRATED"
     DISCARDED = "DISCARDED"
     SYNCED = "SYNCED"
+    QUARANTINED = "QUARANTINED"
+    DROPPED_OVERFLOW = "DROPPED_OVERFLOW"
 
 
 class BufferStatus(str, Enum):
@@ -22,10 +24,6 @@ class RawReading:
     temperature: float
     humidity: float
     captured_at: datetime
-
-    def has_valid_timestamp(self, now: datetime, tolerance: timedelta = timedelta(minutes=5)) -> bool:
-        return self.captured_at <= now + tolerance
-
 
 @dataclass(frozen=True)
 class CalibrationOffset:
@@ -91,6 +89,9 @@ class SensorReading:
     calibrated_humidity: Optional[float] = None
     calibration_profile_id: Optional[int] = None
     id: Optional[int] = None
+    sample_id: Optional[str] = None
+    captured_at_supplied: bool = False
+    received_at: Optional[datetime] = None
 
     @classmethod
     def capture(cls, sensor_node_id: str, raw: RawReading) -> "SensorReading":

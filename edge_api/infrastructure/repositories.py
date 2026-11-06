@@ -94,6 +94,9 @@ class SensorReadingRepository:
             id=m.id,
             sensor_node_id=m.sensor_node_id,
             raw=RawReading(m.raw_temperature, m.raw_humidity, m.captured_at),
+            sample_id=m.sample_id,
+            captured_at_supplied=m.captured_at_supplied,
+            received_at=m.received_at,
             status=ReadingStatus(m.status),
             calibrated_temperature=m.calibrated_temperature,
             calibrated_humidity=m.calibrated_humidity,
@@ -110,12 +113,20 @@ class SensorReadingRepository:
             calibrated_humidity=r.calibrated_humidity,
             captured_at=r.raw.captured_at,
             status=r.status.value,
+            sample_id=r.sample_id,
+            captured_at_supplied=r.captured_at_supplied,
+            received_at=r.received_at,
         )
         if r.id is None:
             r.id = SensorReadingModel.create(**data).id
         else:
             SensorReadingModel.update(**data).where(SensorReadingModel.id == r.id).execute()
         return r
+
+    def find_by_sample(self, sensor_node_id, sample_id) -> Optional[SensorReading]:
+        row = SensorReadingModel.get_or_none((SensorReadingModel.sensor_node_id == sensor_node_id)
+                                            & (SensorReadingModel.sample_id == sample_id))
+        return self._to_domain(row) if row else None
 
     def find_latest(self, limit: int, status: Optional[ReadingStatus] = None) -> list[SensorReading]:
         query = SensorReadingModel.select().order_by(SensorReadingModel.captured_at.desc(), SensorReadingModel.id.desc())
@@ -132,6 +143,12 @@ class SensorReadingRepository:
             .first()
         )
         return m.captured_at if m else None
+
+    def last_received_at(self, sensor_node_id):
+        row = (SensorReadingModel.select(SensorReadingModel.received_at)
+               .where((SensorReadingModel.sensor_node_id == sensor_node_id) & SensorReadingModel.received_at.is_null(False))
+               .order_by(SensorReadingModel.received_at.desc()).first())
+        return row.received_at if row else None
 
 
 class LocalBufferRepository:

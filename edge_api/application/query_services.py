@@ -59,7 +59,7 @@ class GetSensorNodeStatusQueryService:
             statuses.append(
                 {
                     "profile": p,
-                    "lastSeenAt": self.readings.last_captured_at(p.sensor_node_id),
+                    "lastSeenAt": self.readings.last_received_at(p.sensor_node_id),
                     "offline": open_nodes.get(p.sensor_node_id),
                 }
             )
