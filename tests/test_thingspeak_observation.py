@@ -146,7 +146,9 @@ def test_incomplete_ipc_write_cannot_block_deadline_or_invent_child_phase(monkey
 
 
 @pytest.mark.parametrize('raw',[b'{"v":1,"kind":"result"',b'x'*513,
-    b'{"v":1,"kind":"result","attemptId":"wrong","result":{"state":"CONFIRMED"}}'])
+    b'{"v":1,"kind":"result","attemptId":"wrong","result":{"state":"CONFIRMED"}}',
+    phase('HTTP_STARTED',10**309),
+    {'kind':'result','result':{'state':'PENDING','code':'HTTP_429','entryId':None,'retryAfter':10**309,'httpStatus':429}}])
 def test_malformed_or_oversized_messages_never_confirm(monkeypatch,raw,caplog):
     client=wire_client(monkeypatch,[(0,phase('CHILD_ENTERED')),(.01,raw)])
     try:result=client.publish('synthetic-private-key',{})

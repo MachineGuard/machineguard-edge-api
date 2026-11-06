@@ -28,7 +28,7 @@ def decode(raw,attempt):
         if set(value)!= {'v','kind','attemptId','phase','elapsedMs'} or value['phase'] not in CHILD_PHASES:
             raise ValueError('Invalid progress frame')
         elapsed=value['elapsedMs']
-        if type(elapsed) not in (int,float) or not math.isfinite(elapsed) or not 0<=elapsed<=600000:
+        if type(elapsed) not in (int,float) or not 0<=elapsed<=600000 or not math.isfinite(elapsed):
             raise ValueError('Invalid progress duration')
     elif value.get('kind')=='result':
         if set(value)!= {'v','kind','attemptId','result'}:raise ValueError('Invalid result envelope')

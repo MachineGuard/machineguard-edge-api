@@ -90,7 +90,7 @@ def _read_result(data):
     if entry is not None and (type(entry) is not int or not 1<=entry<10**19):raise ValueError('Invalid entry ID')
     if state=='CONFIRMED' and (code!='ENTRY_ACCEPTED' or entry is None or status!=200):raise ValueError('Missing receipt')
     if state!='CONFIRMED' and entry is not None:raise ValueError('Contradictory entry ID')
-    if type(delay) not in (int,float) or not math.isfinite(delay) or not 0<=delay<=31622400:raise ValueError('Invalid delay')
+    if type(delay) not in (int,float) or not 0<=delay<=31622400 or not math.isfinite(delay):raise ValueError('Invalid delay')
     if status is not None and (type(status) is not int or not 100<=status<=599):raise ValueError('Invalid status')
     return ThingSpeakResult(state,code,entry,delay,status)
 
