@@ -88,6 +88,8 @@ Al actualizar la base SQLite, las lecturas anteriores se conservan con
 | `EDGE_SYNC_BATCH_SIZE` | Lecturas por lote al sincronizar | `100` |
 | `EDGE_SAMPLING_INTERVAL` | Intervalo de muestreo por defecto, en segundos | `60` |
 | `EDGE_AVAILABILITY_CHECK_SECONDS` | Cada cuánto se revisan los nodos sin conexión | `30` |
+| `EDGE_BACKUP_DIR` | Carpeta de las copias de la base (ver [arranque y respaldo](arranque-y-respaldo.md)) | `backups` junto a la base |
+| `EDGE_BACKUP_KEEP` | Copias de respaldo que se conservan | `7` |
 
 El archivo `.env.example` incluye además estos grupos:
 

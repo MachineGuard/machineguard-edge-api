@@ -54,6 +54,7 @@ requirements*.txt  Dependencias con hashes: ejecución (.txt) y pruebas (-test.t
 ## Más detalle
 
 - [Configuración](docs/configuracion.md): acceso, variables, credenciales de nodos y límites de datos.
+- [Arranque y respaldo](docs/arranque-y-respaldo.md): arranque automático en Windows, unidad systemd para Raspberry Pi y copias de la base.
 - [Arquitectura y reglas](docs/arquitectura.md): capas, reglas de negocio, entrega y recuperación.
 - [API](docs/api.md): endpoints y códigos de respuesta.
 - [Ejecución y ThingSpeak](docs/ejecucion-y-thingspeak.md): ejecutar en Windows, rotar la credencial y el canal opcional de ThingSpeak.
