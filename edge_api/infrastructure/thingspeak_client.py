@@ -26,6 +26,14 @@ def _read_frames(connection,incoming):
     except OSError:incoming.put_nowait(('invalid',None))
 
 
+def _timeout_diagnostic(process,last_child,marker_at):
+    # Snapshot taken before cleanup terminates the child. No payload, header, URL, key or exception text.
+    marked=last_child!='UNKNOWN'
+    return {'childAlive':bool(process.is_alive()),'exitCode':process.exitcode,
+        'lastMarker':last_child if marked else None,'markerBasis':'CHILD' if marked else 'START_RETURNED',
+        'msSinceLastMarker':round((time.monotonic()-marker_at)*1000,3)}
+
+
 class ThingSpeakClient:
     def __init__(self,seconds=5,request=http_exchange):
         self.seconds,self.request=seconds,request
@@ -38,7 +46,7 @@ class ThingSpeakClient:
         context=multiprocessing.get_context('spawn')
         parent,child=context.Pipe(duplex=False)
         attempt=uuid.uuid4().hex;began=time.monotonic();events=[];last_child='UNKNOWN';last_http='UNKNOWN'
-        rank=-1;last_child_ms=0;limited=False;reader=None
+        rank=-1;last_child_ms=0;limited=False;reader=None;marker_at=None;timeout=None
         incoming=queue.Queue(maxsize=observation.MAX_WIRE_FRAMES+1)
         process=context.Process(target=_child,args=(child,self.request,key,payload,self.seconds,attempt),daemon=True)
         result=ThingSpeakResult('UNCERTAIN','TRANSPORT_ERROR')
@@ -47,7 +55,7 @@ class ThingSpeakClient:
         parent_event('START_REQUESTED')
         try:
             process.start();child.close();deadline=time.monotonic()+self.seconds
-            parent_event('START_RETURNED')
+            parent_event('START_RETURNED');marker_at=time.monotonic()
             reader=threading.Thread(target=_read_frames,args=(parent,incoming),name='thingspeak-pipe-'+attempt[:8],daemon=True)
             reader.start()
             while not cancelled() and time.monotonic()<deadline:
@@ -62,13 +70,15 @@ class ThingSpeakClient:
                         result=_read_result(message['result']);parent_event('RESULT_RECEIVED');break
                     phase=message['phase'];phase_rank=observation.CHILD_PHASES.index(phase)
                     if phase_rank<=rank or message['elapsedMs']<last_child_ms:raise ValueError('Out of order progress')
-                    rank=phase_rank;last_child_ms=message['elapsedMs'];last_child=phase
+                    rank=phase_rank;last_child_ms=message['elapsedMs'];last_child=phase;marker_at=time.monotonic()
                     if phase in observation.HTTP_PHASES:last_http=phase
                     events.append({'phase':phase,'scope':'CHILD','elapsedMs':message['elapsedMs'],
                         'observedAfterMs':round((time.monotonic()-began)*1000,3)})
                 except (ValueError,TypeError,KeyError,UnicodeError,RecursionError):
                     limited=True;result=ThingSpeakResult('UNCERTAIN','INVALID_PROTOCOL');break
-            else:result=ThingSpeakResult('UNCERTAIN','CANCELLED' if cancelled() else 'TIMEOUT')
+            else:
+                result=ThingSpeakResult('UNCERTAIN','CANCELLED' if cancelled() else 'TIMEOUT')
+                if result.code=='TIMEOUT':timeout=_timeout_diagnostic(process,last_child,marker_at)
             return result
         finally:
             cleanup_deadline=time.monotonic()+4  # Keep the previous two 2 s process-cleanup budgets.
@@ -82,7 +92,7 @@ class ThingSpeakClient:
             parent_event('FINAL_RESULT')
             self.last_observation={'attemptId':attempt,'phaseAttribution':'OBSERVED_ONLY',
                 'lastChildPhase':last_child,'lastHttpPhase':last_http,'resultCode':result.code,
-                'events':events[:observation.MAX_EVENTS],'diagnosticsLimited':limited,
+                'timeout':timeout,'events':events[:observation.MAX_EVENTS],'diagnosticsLimited':limited,
                 'readerStopped':reader is None or not reader.is_alive()}
             text=json.dumps(self.last_observation,separators=(',',':'),allow_nan=False)
             try:logger.log(logging.WARNING if result.state=='UNCERTAIN' else logging.INFO,'ThingSpeak diagnostic %s',text)

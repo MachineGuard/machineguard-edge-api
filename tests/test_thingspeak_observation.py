@@ -103,7 +103,7 @@ class WireContext:
         parent=self.parent
         if len(args)==6:parent.attempt=args[-1]
         class Process:
-            pid=1234;alive=True
+            pid=1234;alive=True;exitcode=None
             def start(self):parent.started=time.monotonic()
             def is_alive(self):return self.alive
             def terminate(self):self.alive=False;parent.close()
