@@ -1,0 +1,23 @@
+# Ejemplo local. Copia .env.example a .env, completa los valores privados y no subas .env a Git.
+services:
+  edge:
+    build: .
+    image: machineguard-edge:local
+    env_file:
+      - .env
+    environment:
+      # Rutas y escucha internas del contenedor; tienen prioridad sobre .env.
+      EDGE_DATABASE_PATH: /data/edge.db
+      EDGE_BIND_HOST: 0.0.0.0
+      EDGE_PORT: "5000"
+    ports:
+      # Solo loopback por defecto. Para que los nodos lleguen desde la red, cambia 127.0.0.1 por la IP de la laptop.
+      - "127.0.0.1:${EDGE_HOST_PORT:-5000}:5000"
+    volumes:
+      - edge-data:/data
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+volumes:
+  edge-data:
