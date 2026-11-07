@@ -1,6 +1,6 @@
 # MachineGuard Edge API
 
-Edge es el gateway local de MachineGuard. Corre en una Raspberry Pi o equivalente,
+Edge es el gateway local de MachineGuard. Corre en una laptop o en una Raspberry Pi,
 dentro de la red del cliente. Recibe las lecturas de temperatura y humedad de los
 nodos ESP32, descarta las que son físicamente imposibles y corrige cada una con la
 calibración de su nodo. Luego envía las válidas a la API central (Core). Si no hay
